@@ -3,8 +3,7 @@ use anyhow::*;
 use std::io;
 pub use tui::{backend::CrosstermBackend, Terminal};
 
-pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)>
-{
+pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)> {
     use crossterm::{
         event::{DisableMouseCapture, EnableMouseCapture},
         terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
@@ -46,4 +45,3 @@ impl Drop for OnShutdown {
         }
     }
 }
-

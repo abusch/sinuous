@@ -8,8 +8,8 @@ Note: `sinuous` directly talks to the Sonos speakers via their local upnp interf
 
 ## Key bindings
 - <kbd>Space</kbd>: Play / Pause
-- <kbd>n</kbd>: Next track
-- <kbd>p</kbd>: Previous track
+- <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
+- <kbd>Shift</kbd>+<kbd>Tab</kbd> / <kbd>Tab</kbd>: Switch to previous / next speaker
 - <kbd>q</kbd>: Quit
 
 ## To run
@@ -18,9 +18,10 @@ Install a recent Rust toolchain via [rustup](https://rustup.rs), if you don't al
 To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be found in `/tmp/sinuous.log`.
 
 ## Todo
-- [ ] Allow switching between speakers
+- [x] Allow switching between speakers
 - [ ] Support more actions (seek forward, backward, change playing mode, volume...)
 - [ ] Display play/pause indicator as well as current play mode (shuffle+repeat)
 - [ ] Allow searching for tracks and modify the queue
 - [ ] Allow customizing colours
 - [ ] Allow specifying speaker to connect to as a command line argument
+- [ ] Handle grouping of speakers

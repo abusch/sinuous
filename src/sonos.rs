@@ -6,6 +6,7 @@ use sonor::{Speaker, Track, TrackInfo};
 use tokio::select;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
+use tracing::info;
 use tracing::{debug, error, warn};
 
 use crate::Action;
@@ -14,87 +15,153 @@ use crate::Update;
 #[derive(Debug)]
 pub struct SpeakerState {
     pub is_playing: bool,
-    pub speaker_name: String,
+    pub speaker_names: Vec<String>,
+    pub selected_speaker: usize,
     pub now_playing: Option<TrackInfo>,
     pub queue: Vec<Track>,
 }
 
-pub async fn main_loop(speaker: Speaker, update_tx: Sender<Update>, cmd_rx: Receiver<Action>) {
-    if let Err(err) = inner_loop(speaker, update_tx, cmd_rx).await {
-        error!(%err, "Sonos error");
+impl SpeakerState {
+    pub fn speaker_name(&self) -> &str {
+        &self.speaker_names[self.selected_speaker]
     }
 }
 
-async fn inner_loop(speaker: Speaker, update_tx: Sender<Update>, mut cmd_rx: Receiver<Action>) -> Result<()> {
+pub struct SonosService {
+    update_tx: Sender<Update>,
+    cmd_rx: Receiver<Action>,
+    speakers: Vec<Speaker>,
+    selected_speaker: usize,
+}
+
+impl SonosService {
+    pub fn new(update_tx: Sender<Update>, cmd_rx: Receiver<Action>) -> Self {
+        Self {
+            update_tx,
+            cmd_rx,
+            speakers: vec![],
+            selected_speaker: 0,
+        }
+    }
+
+    pub fn start(self) {
+        tokio::spawn(async move {
+            if let Err(err) = self.inner_loop().await {
+                error!(%err, "Sonos error");
+            }
+        });
+    }
+
+    async fn inner_loop(mut self) -> Result<()> {
+        self.speakers = get_speakers().await?;
+        // let speaker = get_speaker().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         debug!("Starting sonos loop");
+
         loop {
             select! {
                 _tick = ticker.tick() => {
-                    let speaker_state = match get_state(&speaker).await {
-                        Ok(speaker_state) => speaker_state,
-                        Err(err) => {
-                            warn!(%err, "Failed to get state from speaker");
-                            continue;
-                        }
-                    };
-
-                    if let Err(err) = update_tx.send(Update::NewState(speaker_state)).await {
-                        warn!(%err, "Updates channel was closed: exiting");
-                        break;
-                    }
+                    self.send_update().await;
                 }
-                cmd = cmd_rx.recv() => {
+                cmd = self.cmd_rx.recv() => {
                     match cmd {
-                        Some(Action::Play) => speaker.play().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Pause) => speaker.pause().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Next) => speaker.next().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Prev) => speaker.previous().await.unwrap_or_else(|_e| {}),
+                        Some(Action::Play) => self.current_speaker().play().await.unwrap_or_else(|_e| {}),
+                        Some(Action::Pause) => self.current_speaker().pause().await.unwrap_or_else(|_e| {}),
+                        Some(Action::Next) => self.current_speaker().next().await.unwrap_or_else(|_e| {}),
+                        Some(Action::Prev) => self.current_speaker().previous().await.unwrap_or_else(|_e| {}),
+                        Some(Action::NextSpeaker) => self.select_next_speaker(),
+                        Some(Action::PrevSpeaker) => self.select_prev_speaker(),
                         Some(_) => {}, // Nop
                         None => {
                             warn!("Command channel was closed: exiting...");
                             break;
                         }
                     }
+                    self.send_update().await;
                 }
             }
         }
         Ok(())
-}
-
-pub async fn get_state(speaker: &Speaker) -> Result<SpeakerState> {
-    let is_playing = speaker.is_playing().await?;
-    let name = speaker.name().await?;
-    let current_track = speaker.track().await?;
-    let queue = speaker.queue().await?;
-
-    Ok(SpeakerState {
-        is_playing,
-        speaker_name: name,
-        now_playing: current_track,
-        queue,
-    })
-}
-
-pub async fn get_speaker() -> Result<Speaker> {
-    let mut devices = sonor::discover(Duration::from_secs(2)).await?;
-
-    let mut speakers = vec![];
-    while let Some(device) = devices.try_next().await? {
-        let is_playing = device.is_playing().await?;
-        speakers.push((device, is_playing));
     }
 
-    // Return the first speaker that is currently playing, or the first speaker we find otherwise
-    let speaker_idx = speakers
-        .iter()
-        .position(|(_, is_playing)| *is_playing)
-        .unwrap_or(0);
+    async fn send_update(&self) {
+        match self.get_state().await {
+            Ok(speaker_state) => {
+                if let Err(err) = self.update_tx.send(Update::NewState(speaker_state)).await {
+                    warn!(%err, "Updates channel was closed: exiting");
+                }
+            }
+            Err(err) => warn!(%err, "Failed to get state from speaker"),
+        }
+    }
+
+    fn select_prev_speaker(&mut self) {
+        if self.selected_speaker == 0 {
+            self.selected_speaker = self.speakers.len();
+        } else {
+            self.selected_speaker -= 1;
+        }
+    }
+
+    fn select_next_speaker(&mut self) {
+        self.selected_speaker += 1;
+        if self.selected_speaker >= self.speakers.len() {
+            self.selected_speaker = 0;
+        }
+    }
+
+    fn current_speaker(&self) -> &Speaker {
+        &self.speakers[self.selected_speaker]
+    }
+
+    async fn get_state(&self) -> Result<SpeakerState> {
+        let speaker = self.current_speaker();
+        let is_playing = speaker.is_playing().await?;
+        let current_track = speaker.track().await?;
+        let queue = speaker.queue().await?;
+        let mut names = vec![];
+        for speaker in &self.speakers {
+            names.push(speaker.name().await?);
+        }
+
+        Ok(SpeakerState {
+            is_playing,
+            speaker_names: names,
+            selected_speaker: self.selected_speaker,
+            now_playing: current_track,
+            queue,
+        })
+    }
+}
+
+/* pub async fn get_speaker() -> Result<Speaker> {
+    let speakers = get_speakers().await?;
+
+    let mut speaker_idx = 0;
+    // Try to find the first currently playing speaker if there is one
+    for (i, speaker) in speakers.iter().enumerate() {
+        let is_playing = speaker.is_playing().await?;
+        if is_playing {
+            speaker_idx = i;
+            break;
+        }
+    }
 
     speakers
         .into_iter()
         .skip(speaker_idx)
         .next()
-        .map(|(speaker, _)| speaker)
-        .ok_or(anyhow::anyhow!("Unable to find a speaker on the network"))
+        .ok_or(anyhow::anyhow!("Unable to fin a speaker on the network"))
+} */
+
+async fn get_speakers() -> Result<Vec<Speaker>> {
+    debug!("Discovering speakers...");
+    let mut devices = sonor::discover(Duration::from_secs(2)).await?;
+    let mut speakers = vec![];
+    while let Some(device) = devices.try_next().await? {
+        speakers.push(device);
+    }
+
+    info!("Found {} speakers", speakers.len());
+    Ok(speakers)
 }

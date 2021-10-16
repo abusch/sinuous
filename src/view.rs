@@ -1,20 +1,22 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction::Vertical, Layout},
     style::{Color, Modifier, Style},
+    symbols::line::VERTICAL,
     text::{Span, Spans},
-    widgets::{Block, BorderType::Rounded, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, BorderType::Rounded, Borders, Gauge, List, ListItem, Paragraph, Tabs},
     Frame,
 };
 
-use crate::{Action, State};
+use crate::{sonos::SpeakerState, Action};
 
-pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &State) {
+pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &SpeakerState) {
     let chunks = Layout::default()
         .direction(Vertical)
         .constraints(vec![
             Constraint::Length(1),
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(1),
         ])
@@ -30,16 +32,32 @@ pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &State) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" -- Playing on ", Style::default()),
-        Span::styled(
-            &state.speaker_state.speaker_name,
-            Style::default().fg(Color::Green),
-        ),
+        Span::styled(state.speaker_name(), Style::default().fg(Color::Green)),
     ])];
     let title = Paragraph::new(header);
     frame.render_widget(title, chunks[0]);
 
+    // Speaker tabs
+    let names = state
+        .speaker_names
+        .iter()
+        .cloned()
+        .map(Spans::from)
+        .collect();
+    let tabs = Tabs::new(names)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(Rounded)
+                .title(" Speakers "),
+        )
+        .highlight_style(Style::default().fg(Color::Green))
+        .select(state.selected_speaker)
+        .divider(VERTICAL);
+    frame.render_widget(tabs, chunks[1]);
+
     // playbar
-    let (np, label, ratio) = if let Some(track) = &state.speaker_state.now_playing {
+    let (np, label, ratio) = if let Some(track) = &state.now_playing {
         let percent = (track.elapsed() as f64) / (track.duration() as f64);
         let label = format!(
             "{} / {}",
@@ -76,11 +94,10 @@ pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &State) {
         )
         .label(label)
         .ratio(ratio);
-    frame.render_widget(playbar, chunks[1]);
+    frame.render_widget(playbar, chunks[2]);
 
     // queue
     let items = state
-        .speaker_state
         .queue
         .iter()
         .map(|t| {
@@ -100,14 +117,27 @@ pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &State) {
             .title(" Queue ")
             .border_type(Rounded),
     );
-    frame.render_widget(list, chunks[2]);
+    frame.render_widget(list, chunks[3]);
 }
 
-pub fn handle_input(input: &KeyEvent, state: &State) -> Action {
+pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
     match input.code {
-        KeyCode::Char(' ') => if state.speaker_state.is_playing { Action::Pause } else { Action::Play },
+        KeyCode::Char(' ') => {
+            if state.is_playing {
+                Action::Pause
+            } else {
+                Action::Play
+            }
+        }
         KeyCode::Char('n') => Action::Next,
         KeyCode::Char('p') => Action::Prev,
+        KeyCode::Tab => {
+            if input.modifiers.contains(KeyModifiers::SHIFT) {
+                Action::PrevSpeaker
+            } else {
+                Action::NextSpeaker
+            }
+        }
         _ => Action::Nop,
     }
 }

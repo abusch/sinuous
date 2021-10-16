@@ -13,14 +13,9 @@ mod view;
 use crate::sonos::SpeakerState;
 
 #[derive(Debug)]
-pub struct State {
-    speaker_state: SpeakerState,
-}
-
-impl State {
-    pub fn new(speaker_state: SpeakerState) -> Self {
-        Self { speaker_state }
-    }
+pub enum State {
+    Ready(SpeakerState),
+    Connecting,
 }
 
 #[derive(Debug)]
@@ -29,6 +24,8 @@ pub enum Action {
     Pause,
     Next,
     Prev,
+    NextSpeaker,
+    PrevSpeaker,
     Nop,
 }
 
@@ -40,23 +37,15 @@ pub enum Update {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging framework
-    let rolling = tracing_appender::rolling::never(std::env::temp_dir(), "sinuous.log");
-    let (appender, _guard) = tracing_appender::non_blocking(rolling);
-    tracing_subscriber::fmt::SubscriberBuilder::default()
-        .with_writer(appender)
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_ansi(false)
-        .init();
+    init_logger();
 
-    let speaker = sonos::get_speaker().await?;
-    let speaker_state = sonos::get_state(&speaker).await?;
-    let mut state = State::new(speaker_state);
+    let mut state = State::Connecting;
 
     let (update_tx, mut update_rx) = tokio::sync::mpsc::channel(2);
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(2);
 
-    tokio::spawn(sonos::main_loop(speaker, update_tx, cmd_rx));
+    let sonos = sonos::SonosService::new(update_tx, cmd_rx);
+    sonos.start();
 
     // Initialize the terminal user interface.
     let (mut terminal, _cleanup) = term::init_crossterm()?;
@@ -73,15 +62,17 @@ async fn main() -> Result<()> {
                         if input::should_quit(&event) {
                             break;
                         }
-                        let cmd = view::handle_input(&key, &state);
-                        cmd_tx.send(cmd).await?;
+                        if let State::Ready(ref speaker_state) = state {
+                            let cmd = view::handle_input(&key, speaker_state);
+                            cmd_tx.send(cmd).await?;
+                        }
                     }
                     Event::Mouse(_mouse) => todo!(),
                     Event::Resize(_, _) => todo!(),
                 }
             }
             update = update_rx.recv() => match update {
-                Some(Update::NewState(speaker_state)) => state.speaker_state = speaker_state,
+                Some(Update::NewState(speaker_state)) => state = State::Ready(speaker_state),
                 Some(_) => {},
                 None => {
                     // channel was closed for some reason...
@@ -90,8 +81,21 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        terminal.draw(|f| view::render_ui(f, &state))?;
+        if let State::Ready(ref speaker_state) = state {
+            terminal.draw(|f| view::render_ui(f, speaker_state))?;
+        }
     }
 
     Ok(())
+}
+
+fn init_logger() {
+    // Initialize logging framework
+    let rolling = tracing_appender::rolling::never(std::env::temp_dir(), "sinuous.log");
+    let (appender, _guard) = tracing_appender::non_blocking(rolling);
+    tracing_subscriber::fmt::SubscriberBuilder::default()
+        .with_writer(appender)
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_ansi(false)
+        .init();
 }
