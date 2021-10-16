@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
-use tokio::select;
+use tokio::{select, sync::mpsc};
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 
@@ -41,22 +41,24 @@ async fn main() -> Result<()> {
 
     let mut state = State::Connecting;
 
-    let (update_tx, mut update_rx) = tokio::sync::mpsc::channel(2);
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(2);
+    // Channel used to send SpeakerState updates from SonosService to the UI
+    let (update_tx, mut update_rx) = mpsc::channel(2);
+    // Channel to send commands from the UI to SonosService
+    let (cmd_tx, cmd_rx) = mpsc::channel(2);
 
+    // Background service handling all the Sonos stuff
     let sonos = sonos::SonosService::new(update_tx, cmd_rx);
     sonos.start();
 
     // Initialize the terminal user interface.
     let (mut terminal, _cleanup) = term::init_crossterm()?;
-    terminal.clear()?;
 
     let mut events = EventStream::new();
 
     loop {
         select! {
             event = events.try_next() => {
-                let event = event?.ok_or_else(|| anyhow!(""))?;
+                let event = event?.ok_or_else(|| anyhow!("Failed to receive keyboard input"))?;
                 match event {
                     Event::Key(key) => {
                         if input::should_quit(&event) {
@@ -67,8 +69,8 @@ async fn main() -> Result<()> {
                             cmd_tx.send(cmd).await?;
                         }
                     }
-                    Event::Mouse(_mouse) => todo!(),
-                    Event::Resize(_, _) => todo!(),
+                    Event::Mouse(_mouse) => {},
+                    Event::Resize(_, _) => {},
                 }
             }
             update = update_rx.recv() => match update {
