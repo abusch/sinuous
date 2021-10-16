@@ -1,0 +1,20 @@
+[package]
+name = "sinuous"
+version = "0.1.0"
+authors = ["Antoine Busch <antoine.busch@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.44"
+crossterm ={ version = "0.21.0", features=["event-stream"] }
+futures = "0.3.17"
+sonor = "1.1.0"
+tokio = { version = "1.12.0", features = ["full"] }
+tracing = "0.1.29"
+tracing-appender = "0.1.2"
+tracing-subscriber = "0.2.25"
+
+[dependencies.tui]
+version = "0.16.0"
+default-features = false
+features = ["crossterm"]
