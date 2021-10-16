@@ -1,4 +1,5 @@
 # Sinuous
+[![dependency status](https://deps.rs/repo/github/abusch/sinuous/status.svg)](https://deps.rs/repo/github/abusch/sinuous)
 
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
