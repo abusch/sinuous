@@ -6,7 +6,8 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0.44"
-crossterm ={ version = "0.21.0", features=["event-stream"] }
+clap = { version = "3.1", features=["cargo"] }
+crossterm = { version = "0.21.0", features=["event-stream"] }
 futures = "0.3.17"
 sonor = "1.1.0"
 tokio = { version = "1.12.0", features = ["full"] }
