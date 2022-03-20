@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use futures::TryStreamExt;
 use sonor::{Speaker, Track, TrackInfo};
@@ -62,21 +63,15 @@ impl SonosService {
         loop {
             select! {
                 _tick = ticker.tick() => {
+                    // time to refresh our state
                     self.send_update().await;
                 }
                 cmd = self.cmd_rx.recv() => {
-                    match cmd {
-                        Some(Action::Play) => self.current_speaker().play().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Pause) => self.current_speaker().pause().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Next) => self.current_speaker().next().await.unwrap_or_else(|_e| {}),
-                        Some(Action::Prev) => self.current_speaker().previous().await.unwrap_or_else(|_e| {}),
-                        Some(Action::NextSpeaker) => self.select_next_speaker(),
-                        Some(Action::PrevSpeaker) => self.select_prev_speaker(),
-                        Some(_) => {}, // Nop
-                        None => {
-                            warn!("Command channel was closed: exiting...");
-                            break;
-                        }
+                    if let Some(c) = cmd {
+                        self.handle_command(c).await.unwrap_or_else(|e| warn!("{}", e));
+                    } else {
+                        warn!("Command channel was closed: exiting...");
+                        break;
                     }
                     self.send_update().await;
                 }
@@ -85,10 +80,33 @@ impl SonosService {
         Ok(())
     }
 
+    async fn handle_command(&mut self, cmd: Action) -> Result<()> {
+        match cmd {
+            Action::Play => self.current_speaker().play().await,
+            Action::Pause => self.current_speaker().pause().await,
+            Action::Next => self.current_speaker().next().await,
+            Action::Prev => self.current_speaker().previous().await,
+            Action::NextSpeaker => {
+                self.select_next_speaker();
+                Ok(())
+            }
+            Action::PrevSpeaker => {
+                self.select_prev_speaker();
+                Ok(())
+            }
+            Action::Nop => Ok(()), // Nop
+        }
+        .context("Error while handling command")
+    }
+
     async fn send_update(&self) {
         match self.get_state().await {
             Ok(speaker_state) => {
-                if let Err(err) = self.update_tx.send(Update::NewState(speaker_state)).await {
+                if let Err(err) = self
+                    .update_tx
+                    .send(Update::NewState(Box::new(speaker_state)))
+                    .await
+                {
                     warn!(%err, "Updates channel was closed: exiting");
                 }
             }

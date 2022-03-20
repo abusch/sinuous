@@ -17,7 +17,7 @@ use crate::sonos::SpeakerState;
 
 #[derive(Debug)]
 pub enum State {
-    Ready(SpeakerState),
+    Ready(Box<SpeakerState>),
     Connecting,
 }
 
@@ -34,7 +34,7 @@ pub enum Action {
 
 #[derive(Debug)]
 pub enum Update {
-    NewState(SpeakerState),
+    NewState(Box<SpeakerState>),
     Nop,
 }
 
