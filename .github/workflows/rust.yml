@@ -11,12 +11,27 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
-
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        default: true
+        profile: minimal
+
     - uses: actions/checkout@v2
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+
+    - uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --locked
+
+    - uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --locked --release
