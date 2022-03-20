@@ -1,4 +1,4 @@
-use anyhow::*;
+use anyhow::{Context, Result};
 
 use std::io;
 pub use tui::{backend::CrosstermBackend, Terminal};
