@@ -6,6 +6,7 @@ use std::net::{Ipv4Addr};
 use std::str::FromStr;
 use tokio::{select, sync::mpsc};
 use tracing::warn;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
 mod input;
@@ -17,7 +18,7 @@ use crate::sonos::SpeakerState;
 
 #[derive(Debug)]
 pub enum State {
-    Ready(SpeakerState),
+    Ready(Box<SpeakerState>),
     Connecting,
 }
 
@@ -34,13 +35,13 @@ pub enum Action {
 
 #[derive(Debug)]
 pub enum Update {
-    NewState(SpeakerState),
+    NewState(Box<SpeakerState>),
     Nop,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logger();
+    let _guard = init_logger();
 
     // Set the App with clap to accept Command Line Arguments
     let args = Command::new("Sinuous")
@@ -71,7 +72,6 @@ async fn main() -> Result<()> {
             }
         }
     }
-
 
     let mut state = State::Connecting;
 
@@ -125,13 +125,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn init_logger() {
+fn init_logger() -> WorkerGuard {
     // Initialize logging framework
     let rolling = tracing_appender::rolling::never(std::env::temp_dir(), "sinuous.log");
-    let (appender, _guard) = tracing_appender::non_blocking(rolling);
+    let (appender, guard) = tracing_appender::non_blocking(rolling);
     tracing_subscriber::fmt::SubscriberBuilder::default()
         .with_writer(appender)
         .with_env_filter(EnvFilter::from_default_env())
         .with_ansi(false)
         .init();
+    guard
 }
