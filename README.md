@@ -24,5 +24,5 @@ To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be fou
 - [ ] Display play/pause indicator as well as current play mode (shuffle+repeat)
 - [ ] Allow searching for tracks and modify the queue
 - [ ] Allow customizing colours
-- [ ] Allow specifying speaker to connect to as a command line argument
+- [x] Allow specifying speaker to connect to as a command line argument
 - [ ] Handle grouping of speakers

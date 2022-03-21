@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use futures::TryStreamExt;
 use sonor::{Speaker, Track, TrackInfo};
+use std::net::Ipv4Addr;
 use tokio::select;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
@@ -44,16 +45,16 @@ impl SonosService {
         }
     }
 
-    pub fn start(self) {
+    pub fn start(self, provided_devices: (Vec<Ipv4Addr>, Vec<String>)) {
         tokio::spawn(async move {
-            if let Err(err) = self.inner_loop().await {
+            if let Err(err) = self.inner_loop(provided_devices).await {
                 error!(%err, "Sonos error");
             }
         });
     }
 
-    async fn inner_loop(mut self) -> Result<()> {
-        self.speakers = get_speakers().await?;
+    async fn inner_loop(mut self, provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<()> {
+        self.speakers = get_speakers(provided_devices).await?;
         // let speaker = get_speaker().await?;
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         debug!("Starting sonos loop");
@@ -154,12 +155,29 @@ impl SonosService {
         .ok_or(anyhow::anyhow!("Unable to fin a speaker on the network"))
 } */
 
-async fn get_speakers() -> Result<Vec<Speaker>> {
-    debug!("Discovering speakers...");
-    let mut devices = sonor::discover(Duration::from_secs(2)).await?;
-    let mut speakers = vec![];
-    while let Some(device) = devices.try_next().await? {
-        speakers.push(device);
+async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<Vec<Speaker>> {
+    let mut speakers: Vec<Speaker> = vec![];
+    debug!("Connecting to provided speakers...");
+    for e in provided_devices.0.iter() {
+        if let Some(spk) = sonor::Speaker::from_ip(*e).await.unwrap_or(None) {
+            speakers.push(spk);
+        } else {
+            debug!("Not connecting to {} due to errors", e);
+        }
+    }
+    for e in provided_devices.1.iter() {
+        if let Some(device) = sonor::find(e, Duration::from_secs(2)).await? {
+            speakers.push(device);
+        } else {
+            debug!("Not connecting to {} due to errors", e);
+        }
+    }
+    if provided_devices.0.is_empty() && provided_devices.1.is_empty() {
+        debug!("Discovering speakers...");
+        let mut devices = sonor::discover(Duration::from_secs(2)).await?;
+        while let Some(device) = devices.try_next().await? {
+            speakers.push(device);
+        }
     }
 
     info!("Found {} speakers", speakers.len());

@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
+use clap::{Arg, Command, crate_authors, crate_version};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
+use std::net::{Ipv4Addr};
+use std::str::FromStr;
 use tokio::{select, sync::mpsc};
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
@@ -39,6 +42,37 @@ pub enum Update {
 async fn main() -> Result<()> {
     init_logger();
 
+    // Set the App with clap to accept Command Line Arguments
+    let args = Command::new("Sinuous")
+        .version(crate_version!())
+        .author(crate_authors!("\n"))
+        .about("A simple TUI for controlling Sonos speakers")
+        .arg(
+            Arg::new("device")
+                .short('d')
+                .long("device")
+                .help("Specify a speaker to connect to. Provide either an Ipv4 Address or a name to search for. Multiple values are possible by seperating them with a comma")
+                .takes_value(true)
+        ).get_matches();
+
+    // Set two Vectors: One for provided IPs, one for provided device names
+    let mut provided_ips: Vec<Ipv4Addr> = Vec::new();
+    let mut provided_names: Vec<String> = Vec::new();
+
+    // Iterate over the provided device argument, if present
+    if let Some(provided_device) = args.value_of("device") {
+        // Split the device argument by commas and iterate over the single provided devices
+        for e in provided_device.split(',') {
+            // Try to parse the element into an Ipv4Addr, if not possible accept it as a name
+            if let Ok(ip) = Ipv4Addr::from_str(e) {
+                provided_ips.push(ip);
+            } else {
+                provided_names.push(e.to_string());
+            }
+        }
+    }
+
+
     let mut state = State::Connecting;
 
     // Channel used to send SpeakerState updates from SonosService to the UI
@@ -48,7 +82,7 @@ async fn main() -> Result<()> {
 
     // Background service handling all the Sonos stuff
     let sonos = sonos::SonosService::new(update_tx, cmd_rx);
-    sonos.start();
+    sonos.start((provided_ips, provided_names));
 
     // Initialize the terminal user interface.
     let (mut terminal, _cleanup) = term::init_crossterm()?;
