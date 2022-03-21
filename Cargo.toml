@@ -5,12 +5,12 @@ authors = ["Antoine Busch <antoine.busch@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.56"
 clap = { version = "3.1", features=["cargo"] }
 crossterm = { version = "0.21.0", features=["event-stream"] }
-futures = "0.3.17"
+futures = "0.3.21"
 sonor = "1.1.0"
-tokio = { version = "1.12.0", features = ["full"] }
+tokio = { version = "1.16.1", features = ["full"] }
 tracing = "0.1.29"
 tracing-appender = "0.1.2"
 tracing-subscriber = "0.2.25"
