@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::{Arg, Command, crate_authors, crate_version};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
-use std::net::{Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 use tokio::{select, sync::mpsc};
 use tracing::warn;
