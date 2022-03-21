@@ -1,13 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction::Vertical, Layout},
+    layout::{Alignment::Center, Constraint, Direction::Vertical, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
     text::{Span, Spans},
-    widgets::{
-        Block, BorderType::Rounded, Borders, Gauge, List, ListItem, Paragraph, Tabs, Widget,
-    },
+    widgets::{Block, BorderType::Rounded, Borders, Gauge, List, ListItem, Paragraph, Tabs},
     Frame,
 };
 
@@ -25,20 +23,16 @@ pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &SpeakerState) {
         .split(frame.size());
 
     // Title line
-    let title = render_title_bar(state);
-    frame.render_widget(title, chunks[0]);
+    render_title_bar(state, frame, chunks[0]);
 
     // Speaker tabs
-    let tabs = render_tabs(state);
-    frame.render_widget(tabs, chunks[1]);
+    render_tabs(state, frame, chunks[1]);
 
     // playbar
-    let playbar = render_playbar(state);
-    frame.render_widget(playbar, chunks[2]);
+    render_playbar(state, frame, chunks[2]);
 
     // queue
-    let list = render_queue(state);
-    frame.render_widget(list, chunks[3]);
+    render_queue(state, frame, chunks[3]);
 }
 
 pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
@@ -63,7 +57,7 @@ pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
     }
 }
 
-fn render_title_bar(state: &SpeakerState) -> impl Widget + '_ {
+fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
     let header = vec![Spans::from(vec![
         Span::styled(
             " Sinuous v0.1 ",
@@ -75,10 +69,11 @@ fn render_title_bar(state: &SpeakerState) -> impl Widget + '_ {
         Span::styled(" -- Playing on ", Style::default()),
         Span::styled(state.speaker_name(), Style::default().fg(Color::Green)),
     ])];
-    Paragraph::new(header)
+    let title = Paragraph::new(header);
+    frame.render_widget(title, area);
 }
 
-fn render_tabs(state: &SpeakerState) -> impl Widget {
+fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
     let names = state
         .speaker_names
         .iter()
@@ -96,10 +91,10 @@ fn render_tabs(state: &SpeakerState) -> impl Widget {
         .select(state.selected_speaker)
         .divider(VERTICAL);
 
-    tabs
+    frame.render_widget(tabs, area);
 }
 
-fn render_queue(state: &SpeakerState) -> impl Widget {
+fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
     let items = state
         .queue
         .iter()
@@ -121,10 +116,10 @@ fn render_queue(state: &SpeakerState) -> impl Widget {
             .border_type(Rounded),
     );
 
-    list
+    frame.render_widget(list, area);
 }
 
-fn render_playbar(state: &SpeakerState) -> impl Widget {
+fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
     let (np, label, ratio) = if let Some(track) = &state.now_playing {
         let percent = (track.elapsed() as f64) / (track.duration() as f64);
         let label = format!(
@@ -146,13 +141,25 @@ fn render_playbar(state: &SpeakerState) -> impl Widget {
             0.0,
         )
     };
+
+    // Border around the whole playbar section
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(Rounded)
+        .title(np);
+    // The inner area is where the gauge and control buttons will be rendered
+    let playbar_area = block.inner(area);
+
+    // split the inner area into 2 columns for the buttons and the gauge
+    let playbar_chunks = Layout::default()
+        .direction(tui::layout::Direction::Horizontal)
+        .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
+        .split(playbar_area);
+
+    let media_symbol = if state.is_playing { "⏵" } else { "⏸" };
+    let symbol = Paragraph::new(media_symbol).alignment(Center);
+
     let playbar = Gauge::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(Rounded)
-                .title(np),
-        )
         .use_unicode(true)
         .gauge_style(
             Style::default()
@@ -163,7 +170,10 @@ fn render_playbar(state: &SpeakerState) -> impl Widget {
         .label(label)
         .ratio(ratio);
 
-    playbar
+    // render all the widgets
+    frame.render_widget(block, area);
+    frame.render_widget(symbol, playbar_chunks[0]);
+    frame.render_widget(playbar, playbar_chunks[1]);
 }
 
 fn format_duration(secs: u32) -> String {
