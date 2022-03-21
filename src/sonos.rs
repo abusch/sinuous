@@ -172,10 +172,12 @@ async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<
             debug!("Not connecting to {} due to errors", e);
         }
     }
-    debug!("Discovering speakers...");
-    let mut devices = sonor::discover(Duration::from_secs(2)).await?;
-    while let Some(device) = devices.try_next().await? {
-        speakers.push(device);
+    if provided_devices.0.is_empty() && provided_devices.1.is_empty() {
+        debug!("Discovering speakers...");
+        let mut devices = sonor::discover(Duration::from_secs(2)).await?;
+        while let Some(device) = devices.try_next().await? {
+            speakers.push(device);
+        }
     }
 
     info!("Found {} speakers", speakers.len());
