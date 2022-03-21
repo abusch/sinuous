@@ -1,5 +1,6 @@
 # Sinuous
 [![dependency status](https://deps.rs/repo/github/abusch/sinuous/status.svg)](https://deps.rs/repo/github/abusch/sinuous)
+[![Build](https://github.com/abusch/sinuous/actions/workflows/rust.yml/badge.svg)](https://github.com/abusch/sinuous/actions/workflows/rust.yml)
 
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
