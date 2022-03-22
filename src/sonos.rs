@@ -17,6 +17,7 @@ use crate::Update;
 #[derive(Debug)]
 pub struct SpeakerState {
     pub is_playing: bool,
+    pub current_volume: u16,
     pub speaker_names: Vec<String>,
     pub selected_speaker: usize,
     pub now_playing: Option<TrackInfo>,
@@ -136,6 +137,7 @@ impl SonosService {
     async fn get_state(&self) -> Result<SpeakerState> {
         let speaker = self.current_speaker();
         let is_playing = speaker.is_playing().await?;
+        let current_volume = speaker.volume().await?;
         let current_track = speaker.track().await?;
         let queue = speaker.queue().await?;
         let mut names = vec![];
@@ -143,8 +145,12 @@ impl SonosService {
             names.push(speaker.name().await?);
         }
 
+        // let groups = speaker.zone_group_state().await?;
+        // debug!("zone_group_state: {:?}", groups);
+
         Ok(SpeakerState {
             is_playing,
+            current_volume,
             speaker_names: names,
             selected_speaker: self.selected_speaker,
             now_playing: current_track,

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
     backend::Backend,
-    layout::{Alignment::Center, Constraint, Direction::Vertical, Layout, Rect},
+    layout::{Alignment::{Center, Right}, Constraint, Direction::{Vertical, Horizontal}, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
     text::{Span, Spans},
@@ -58,9 +58,14 @@ pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
 }
 
 fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Horizontal)
+        .constraints(vec![Constraint::Min(1), Constraint::Length(8)])
+        .split(area);
+
     let header = vec![Spans::from(vec![
         Span::styled(
-            " Sinuous v0.1 ",
+            " Sinuous v0.1 ", // TODO don't hardcode version number
             Style::default()
                 .fg(Color::Yellow)
                 .bg(Color::DarkGray)
@@ -70,7 +75,12 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
         Span::styled(state.speaker_name(), Style::default().fg(Color::Green)),
     ])];
     let title = Paragraph::new(header);
-    frame.render_widget(title, area);
+    frame.render_widget(title, chunks[0]);
+
+    let vol_text = format!("🔊: {:2} ", state.current_volume);
+    let vol = Paragraph::new(vol_text)
+        .alignment(Right);
+    frame.render_widget(vol, chunks[1]);
 }
 
 fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
@@ -152,7 +162,7 @@ fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: 
 
     // split the inner area into 2 columns for the buttons and the gauge
     let playbar_chunks = Layout::default()
-        .direction(tui::layout::Direction::Horizontal)
+        .direction(Horizontal)
         .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
         .split(playbar_area);
 
