@@ -87,6 +87,11 @@ impl SonosService {
             Action::Pause => self.current_speaker().pause().await,
             Action::Next => self.current_speaker().next().await,
             Action::Prev => self.current_speaker().previous().await,
+            Action::VolAdjust(v) => self
+                .current_speaker()
+                .set_volume_relative(v)
+                .await
+                .map(drop),
             Action::NextSpeaker => {
                 self.select_next_speaker();
                 Ok(())

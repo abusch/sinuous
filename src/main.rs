@@ -30,6 +30,7 @@ pub enum Action {
     Prev,
     NextSpeaker,
     PrevSpeaker,
+    VolAdjust(i16),
     Nop,
 }
 

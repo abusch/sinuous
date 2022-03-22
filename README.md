@@ -11,6 +11,7 @@ Note: `sinuous` directly talks to the Sonos speakers via their local upnp interf
 ## Key bindings
 - <kbd>Space</kbd>: Play / Pause
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
+- <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current speaker
 - <kbd>Shift</kbd>+<kbd>Tab</kbd> / <kbd>Tab</kbd>: Switch to previous / next speaker
 - <kbd>q</kbd>: Quit
 

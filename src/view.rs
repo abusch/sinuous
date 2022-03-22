@@ -46,6 +46,8 @@ pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
         }
         KeyCode::Char('n') => Action::Next,
         KeyCode::Char('p') => Action::Prev,
+        KeyCode::Char('[') => Action::VolAdjust(-2),
+        KeyCode::Char(']') => Action::VolAdjust(2),
         KeyCode::Tab => {
             if input.modifiers.contains(KeyModifiers::SHIFT) {
                 Action::PrevSpeaker
