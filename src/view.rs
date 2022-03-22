@@ -1,11 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
     backend::Backend,
-    layout::{Alignment::{Center, Right}, Constraint, Direction::{Vertical, Horizontal}, Layout, Rect},
+    layout::{
+        Alignment::{Center, Right},
+        Constraint,
+        Direction::{Horizontal, Vertical},
+        Layout, Rect,
+    },
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
     text::{Span, Spans},
-    widgets::{Block, BorderType::Rounded, Borders, Gauge, List, ListItem, Paragraph, Tabs},
+    widgets::{
+        Block, BorderType::Rounded, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs,
+    },
     Frame,
 };
 
@@ -80,8 +87,7 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
     frame.render_widget(title, chunks[0]);
 
     let vol_text = format!("🔊: {:2} ", state.current_volume);
-    let vol = Paragraph::new(vol_text)
-        .alignment(Right);
+    let vol = Paragraph::new(vol_text).alignment(Right);
     frame.render_widget(vol, chunks[1]);
 }
 
@@ -107,6 +113,16 @@ fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rec
 }
 
 fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
+    // Select the currently playing track in the queue (if any)
+    let mut list_state = ListState::default();
+    let selection = state.now_playing.as_ref().and_then(|track| {
+        state
+            .queue
+            .iter()
+            .position(|t| t.uri() == track.track().uri())
+    });
+    list_state.select(selection);
+
     let items = state
         .queue
         .iter()
@@ -121,14 +137,17 @@ fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Re
             ListItem::new(s)
         })
         .collect::<Vec<_>>();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Queue ")
-            .border_type(Rounded),
-    );
+    let list = List::new(items)
+        .highlight_style(Style::default().fg(Color::LightMagenta))
+        .highlight_symbol("⏵")
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Queue ")
+                .border_type(Rounded),
+        );
 
-    frame.render_widget(list, area);
+    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
