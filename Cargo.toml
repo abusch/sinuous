@@ -3,6 +3,11 @@ name = "sinuous"
 version = "0.1.0"
 authors = ["Antoine Busch <antoine.busch@gmail.com>"]
 edition = "2021"
+description = "A simple TUI for controlling local Sonos speakers"
+license = "MIT"
+license-file = "LICENSE"
+repository = "https://github.com/abusch/sinuous.git"
+homepage = "https://github.com/abusch/sinuous"
 
 [dependencies]
 anyhow = "1.0.56"
