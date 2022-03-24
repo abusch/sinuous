@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use clap::{Arg, Command, crate_authors, crate_version};
+use clap::{crate_authors, crate_version, Arg, Command};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use std::net::Ipv4Addr;
