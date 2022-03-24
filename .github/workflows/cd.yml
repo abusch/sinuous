@@ -1,0 +1,108 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publishing ${{ matrix.build_target }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      matrix:
+        build_target: [linux-x86_64, linux-arm64, linux-armhf, macos-x86_64, windows-x86_64]
+        include:
+          - build_target: linux-x86_64
+            os: ubuntu-latest
+            container: rust
+            target: x86_64-unknown-linux-gnu
+            features: ''
+            dependencies: ''
+          - build_target: linux-arm64
+            os: ubuntu-latest
+            container: rustembedded/cross:aarch64-unknown-linux-gnu-0.2.1
+            target: aarch64-unknown-linux-gnu
+            features: ''
+            dependencies: ''
+            cross_arch: 'arm64'
+            pkg_config_path: '/usr/lib/aarch64-linux-gnu/pkgconfig/'
+          - build_target: linux-armhf
+            os: ubuntu-latest
+            container: rustembedded/cross:armv7-unknown-linux-gnueabihf-0.2.1
+            target: armv7-unknown-linux-gnueabihf
+            features: ''
+            dependencies: ''
+            cross_arch: 'armhf'
+            pkg_config_path: '/usr/lib/arm-linux-gnueabihf/pkgconfig/'
+          - build_target: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            features: ''
+          - build_target: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            features: ''
+    steps:
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+          profile: minimal
+      # - name: Install macOS dependencies
+      #   if: matrix.os == 'macos-latest'
+      #   run: brew install portaudio pkg-config
+      - name: Set up cross compilation
+        if: matrix.cross_arch
+        run: |
+          dpkg --add-architecture ${{ matrix.cross_arch }}
+          echo "PKG_CONFIG_PATH=${{ matrix.pkg_config_path }}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+      # - name: Install Linux dependencies
+      #   if: startsWith(matrix.build_target, 'linux-')
+      #   run: |
+      #     apt update
+      #     apt install -y ${{ matrix.dependencies }}
+      - uses: actions/checkout@v2
+        name: Checkout src
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Running cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
+      - name: Extract git tag
+        shell: bash
+        run: echo "##[set-output name=tag;]$(echo ${GITHUB_REF#refs/tags/})"
+        id: extract_tag
+      - name: Packaging assets
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          case ${{ matrix.target }} in
+          *-pc-windows-*) 
+            7z -y a sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.zip sinuous.exe
+            sha256sum sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.zip > sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.sha256
+            ;;
+          *) 
+            tar czvf sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.tar.gz sinuous
+            shasum -a 256 sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.tar.gz > sinuous-${{ steps.extract_tag.outputs.tag }}-${{ matrix.build_target }}.sha256
+            ;;
+          esac;
+      - name: Releasing assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/${{ matrix.target }}/release/sinuous-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
