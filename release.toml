@@ -1,2 +1,2 @@
 allow-branch = ["main"]
-pre-release-hook = ["git", "cliff", "-o", "./CHANGELOG.md", "-t", "$NEW_VERSION"]
+pre-release-hook = ["./scripts/pre-release-hook.sh"]
