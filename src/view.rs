@@ -1,3 +1,4 @@
+use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
     backend::Backend,
@@ -74,7 +75,7 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
 
     let header = vec![Spans::from(vec![
         Span::styled(
-            " Sinuous v0.1 ", // TODO don't hardcode version number
+            format!("Sinuous {}", crate_version!()),
             Style::default()
                 .fg(Color::Yellow)
                 .bg(Color::DarkGray)
