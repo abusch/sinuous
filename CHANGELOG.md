@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [$NEW_VERSION] - 2022-03-25
+## [0.1.2] - 2022-03-25
+
+### Ci
+
+- Move pre-release hook to script file
+
+## [0.1.1] - 2022-03-25
 
 ### Bug Fixes
 
