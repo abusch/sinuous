@@ -20,6 +20,10 @@ Install a recent Rust toolchain via [rustup](https://rustup.rs), if you don't al
 
 To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be found in `/tmp/sinuous.log`.
 
+## Screenshot
+
+![screenshot](assets/screenshot.png)
+
 ## Todo
 - [x] Allow switching between speakers
 - [ ] Support more actions (seek forward, backward, change playing mode, volume...)
