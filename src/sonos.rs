@@ -63,7 +63,7 @@ impl SonosService {
         let speakers = get_speakers(provided_devices).await?;
 
         let mut speakers_by_uuid = BTreeMap::new();
-        // TODO do in parallel
+        // TODO do in parallel?
         for s in speakers {
             let uuid = s.uuid().await?;
             speakers_by_uuid.insert(uuid, s);
@@ -186,26 +186,6 @@ impl SonosService {
         })
     }
 }
-
-/* pub async fn get_speaker() -> Result<Speaker> {
-    let speakers = get_speakers().await?;
-
-    let mut speaker_idx = 0;
-    // Try to find the first currently playing speaker if there is one
-    for (i, speaker) in speakers.iter().enumerate() {
-        let is_playing = speaker.is_playing().await?;
-        if is_playing {
-            speaker_idx = i;
-            break;
-        }
-    }
-
-    speakers
-        .into_iter()
-        .skip(speaker_idx)
-        .next()
-        .ok_or(anyhow::anyhow!("Unable to fin a speaker on the network"))
-} */
 
 async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<Vec<Speaker>> {
     let mut speakers: Vec<Speaker> = vec![];
