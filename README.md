@@ -4,21 +4,27 @@
 
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
-It currently connects to the first speaker that is currently playing (or the first speaker found if no speaker is currently playing), displays the current track, and the current queue.
+It currently allows you to cycle through the different groups (zone players),
+displays the current track, and the current queue.
 
-Note: `sinuous` directly talks to the Sonos speakers via their local upnp interface, and the speakers are discovered via the SSDP protocol. This means your Sonos speakers need to be on the same network (or visible from your current network).
+Note: `sinuous` directly talks to the Sonos speakers via their local upnp
+interface, and the speakers are discovered via the SSDP protocol. This means
+your Sonos speakers need to be on the same network (or visible from your
+current network).
 
 ## Key bindings
 - <kbd>Space</kbd>: Play / Pause
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
-- <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current speaker
-- <kbd>Shift</kbd>+<kbd>Tab</kbd> / <kbd>Tab</kbd>: Switch to previous / next speaker
+- <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the coordinator of the current group
+- <kbd>Shift+Tab</kbd> / <kbd>Tab</kbd>: Switch to previous / next group
 - <kbd>q</kbd>: Quit
 
 ## To run
-Install a recent Rust toolchain via [rustup](https://rustup.rs), if you don't already have one, then simply run `cargo run`.
+Install a recent Rust toolchain via [rustup](https://rustup.rs), if you don't
+already have one, then simply run `cargo run`.
 
-To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be found in `/tmp/sinuous.log`.
+To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be
+found in `/tmp/sinuous.log`.
 
 ## Screenshot
 
