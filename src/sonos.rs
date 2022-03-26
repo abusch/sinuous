@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
 use futures::TryStreamExt;
+use sonor::SpeakerInfo;
 use sonor::{Speaker, Track, TrackInfo};
 use std::net::Ipv4Addr;
 use tokio::select;
@@ -18,23 +20,24 @@ use crate::Update;
 pub struct SpeakerState {
     pub is_playing: bool,
     pub current_volume: u16,
-    pub speaker_names: Vec<String>,
-    pub selected_speaker: usize,
+    pub group_names: Vec<String>,
+    pub selected_group: usize,
     pub now_playing: Option<TrackInfo>,
     pub queue: Vec<Track>,
 }
 
 impl SpeakerState {
-    pub fn speaker_name(&self) -> &str {
-        &self.speaker_names[self.selected_speaker]
+    pub fn group_name(&self) -> &str {
+        &self.group_names[self.selected_group]
     }
 }
 
 pub struct SonosService {
     update_tx: Sender<Update>,
     cmd_rx: Receiver<Action>,
-    speakers: Vec<Speaker>,
-    selected_speaker: usize,
+    speakers_by_uuid: BTreeMap<String, Speaker>,
+    groups: Vec<SpeakerGroup>,
+    selected_group: usize,
 }
 
 impl SonosService {
@@ -42,8 +45,9 @@ impl SonosService {
         Self {
             update_tx,
             cmd_rx,
-            speakers: vec![],
-            selected_speaker: 0,
+            speakers_by_uuid: BTreeMap::new(),
+            groups: vec![],
+            selected_group: 0,
         }
     }
 
@@ -56,8 +60,30 @@ impl SonosService {
     }
 
     async fn inner_loop(mut self, provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<()> {
-        self.speakers = get_speakers(provided_devices).await?;
-        // let speaker = get_speaker().await?;
+        let speakers = get_speakers(provided_devices).await?;
+
+        let mut speakers_by_uuid = BTreeMap::new();
+        // TODO do in parallel?
+        for s in speakers {
+            let uuid = s.uuid().await?;
+            speakers_by_uuid.insert(uuid, s);
+        }
+
+        // Use the first speaker discovered
+        let (_uuid, speaker) = speakers_by_uuid
+            .iter()
+            .next()
+            .context("No speaker discovered!")?;
+        let groups = speaker.zone_group_state().await?;
+        debug!("Found {} groups", groups.len());
+
+        let group_list = groups
+            .into_iter()
+            .map(|(uuid, speaker_list)| SpeakerGroup::new(uuid, speaker_list))
+            .collect::<Vec<_>>();
+        self.groups = group_list;
+        self.speakers_by_uuid = speakers_by_uuid;
+
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         debug!("Starting sonos loop");
 
@@ -82,22 +108,19 @@ impl SonosService {
     }
 
     async fn handle_command(&mut self, cmd: Action) -> Result<()> {
+        let current_speaker = self.current_speaker().context("No selected group")?;
         match cmd {
-            Action::Play => self.current_speaker().play().await,
-            Action::Pause => self.current_speaker().pause().await,
-            Action::Next => self.current_speaker().next().await,
-            Action::Prev => self.current_speaker().previous().await,
-            Action::VolAdjust(v) => self
-                .current_speaker()
-                .set_volume_relative(v)
-                .await
-                .map(drop),
+            Action::Play => current_speaker.play().await,
+            Action::Pause => current_speaker.pause().await,
+            Action::Next => current_speaker.next().await,
+            Action::Prev => current_speaker.previous().await,
+            Action::VolAdjust(v) => current_speaker.set_volume_relative(v).await.map(drop),
             Action::NextSpeaker => {
-                self.select_next_speaker();
+                self.select_next_group();
                 Ok(())
             }
             Action::PrevSpeaker => {
-                self.select_prev_speaker();
+                self.select_prev_group();
                 Ok(())
             }
             Action::Nop => Ok(()), // Nop
@@ -120,69 +143,49 @@ impl SonosService {
         }
     }
 
-    fn select_prev_speaker(&mut self) {
-        if self.selected_speaker == 0 {
-            self.selected_speaker = self.speakers.len();
+    fn select_prev_group(&mut self) {
+        if self.selected_group == 0 {
+            self.selected_group = self.groups.len();
         } else {
-            self.selected_speaker -= 1;
+            self.selected_group -= 1;
         }
     }
 
-    fn select_next_speaker(&mut self) {
-        self.selected_speaker += 1;
-        if self.selected_speaker >= self.speakers.len() {
-            self.selected_speaker = 0;
+    fn select_next_group(&mut self) {
+        self.selected_group += 1;
+        if self.selected_group >= self.groups.len() {
+            self.selected_group = 0;
         }
     }
 
-    fn current_speaker(&self) -> &Speaker {
-        &self.speakers[self.selected_speaker]
+    fn current_speaker(&self) -> Option<&Speaker> {
+        // &self.speakers[self.selected_speaker]
+        self.groups
+            .get(self.selected_group)
+            .and_then(|group| self.speakers_by_uuid.get(&group.coordinator))
     }
 
     async fn get_state(&self) -> Result<SpeakerState> {
-        let speaker = self.current_speaker();
+        let speaker = self.current_speaker().context("No selected group")?;
         let is_playing = speaker.is_playing().await?;
         let current_volume = speaker.volume().await?;
         let current_track = speaker.track().await?;
         let queue = speaker.queue().await?;
         let mut names = vec![];
-        for speaker in &self.speakers {
-            names.push(speaker.name().await?);
+        for group in &self.groups {
+            names.push(group.name());
         }
-
-        // let groups = speaker.zone_group_state().await?;
-        // debug!("zone_group_state: {:?}", groups);
 
         Ok(SpeakerState {
             is_playing,
             current_volume,
-            speaker_names: names,
-            selected_speaker: self.selected_speaker,
+            group_names: names,
+            selected_group: self.selected_group,
             now_playing: current_track,
             queue,
         })
     }
 }
-
-/* pub async fn get_speaker() -> Result<Speaker> {
-    let speakers = get_speakers().await?;
-
-    let mut speaker_idx = 0;
-    // Try to find the first currently playing speaker if there is one
-    for (i, speaker) in speakers.iter().enumerate() {
-        let is_playing = speaker.is_playing().await?;
-        if is_playing {
-            speaker_idx = i;
-            break;
-        }
-    }
-
-    speakers
-        .into_iter()
-        .skip(speaker_idx)
-        .next()
-        .ok_or(anyhow::anyhow!("Unable to fin a speaker on the network"))
-} */
 
 async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<Vec<Speaker>> {
     let mut speakers: Vec<Speaker> = vec![];
@@ -211,4 +214,35 @@ async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<
 
     info!("Found {} speakers", speakers.len());
     Ok(speakers)
+}
+
+struct SpeakerGroup {
+    coordinator: String,
+    speakers: Vec<SpeakerInfo>,
+}
+
+impl SpeakerGroup {
+    #[must_use]
+    fn new(coordinator: String, mut speakers: Vec<SpeakerInfo>) -> Self {
+        let mut speaker_list = vec![];
+        let coordinator_speaker = speakers
+            .iter()
+            .position(|s| s.uuid() == coordinator)
+            .expect("Coordinator of the group was not found in the members of the group??");
+
+        // Make sure the coordinator is first in the list of speakers, so its name gets displayed
+        // first.
+        speaker_list.push(speakers.remove(coordinator_speaker));
+        // Now add the rest of the speakers
+        speaker_list.append(&mut speakers);
+        Self {
+            coordinator,
+            speakers: speaker_list,
+        }
+    }
+
+    fn name(&self) -> String {
+        let names: Vec<_> = self.speakers.iter().map(|s| s.name()).collect();
+        names.join(" + ")
+    }
 }

@@ -33,7 +33,7 @@ pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &SpeakerState) {
     // Title line
     render_title_bar(state, frame, chunks[0]);
 
-    // Speaker tabs
+    // Group tabs
     render_tabs(state, frame, chunks[1]);
 
     // playbar
@@ -82,7 +82,7 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" -- Playing on ", Style::default()),
-        Span::styled(state.speaker_name(), Style::default().fg(Color::Green)),
+        Span::styled(state.group_name(), Style::default().fg(Color::Green)),
     ])];
     let title = Paragraph::new(header);
     frame.render_widget(title, chunks[0]);
@@ -93,21 +93,16 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
 }
 
 fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
-    let names = state
-        .speaker_names
-        .iter()
-        .cloned()
-        .map(Spans::from)
-        .collect();
+    let names = state.group_names.iter().cloned().map(Spans::from).collect();
     let tabs = Tabs::new(names)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(Rounded)
-                .title(" Speakers "),
+                .title(" Groups "),
         )
         .highlight_style(Style::default().fg(Color::Green))
-        .select(state.selected_speaker)
+        .select(state.selected_group)
         .divider(VERTICAL);
 
     frame.render_widget(tabs, area);
