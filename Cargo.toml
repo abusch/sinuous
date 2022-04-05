@@ -11,7 +11,7 @@ homepage = "https://github.com/abusch/sinuous"
 [dependencies]
 anyhow = "1.0.56"
 clap = { version = "3.1", features=["cargo"] }
-crossterm ={ version = "0.23.1", features=["event-stream"] }
+crossterm ={ version = "0.23.2", features=["event-stream"] }
 futures = "0.3.21"
 sonor = "1.1.0"
 tokio = { version = "1.17.0", features = ["full"] }
