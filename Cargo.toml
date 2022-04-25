@@ -20,7 +20,7 @@ tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
 
 [dependencies.tui]
-version = "0.17.0"
+version = "0.18.0"
 default-features = false
 features = ["crossterm"]
 
