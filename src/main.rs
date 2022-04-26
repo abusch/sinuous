@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use tokio::{select, sync::mpsc};
-use tracing::{warn, error};
+use tracing::{error, warn};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
