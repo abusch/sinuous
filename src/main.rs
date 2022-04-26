@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use tokio::{select, sync::mpsc};
-use tracing::warn;
+use tracing::{warn, error};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
@@ -41,7 +41,7 @@ pub enum Update {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let _guard = init_logger();
 
     // Set the App with clap to accept Command Line Arguments
@@ -74,6 +74,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    if let Err(err) = run_app(provided_names, provided_ips).await {
+        error!("Main loop exited with error: {}", err)
+    }
+}
+
+async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Result<()> {
     let mut state = State::Connecting;
 
     // Channel used to send SpeakerState updates from SonosService to the UI
