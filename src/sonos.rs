@@ -108,6 +108,7 @@ impl SonosService {
     }
 
     async fn handle_command(&mut self, cmd: Action) -> Result<()> {
+        debug!(?cmd, "Handling command");
         let current_speaker = self.current_speaker().context("No selected group")?;
         match cmd {
             Action::Play => current_speaker.play().await,

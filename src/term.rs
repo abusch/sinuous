@@ -1,13 +1,13 @@
-use anyhow::{Context, Result};
-
 use std::io;
-pub use tui::{backend::CrosstermBackend, Terminal};
+
+use anyhow::{Context, Result};
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use tui::{backend::CrosstermBackend, Terminal};
 
 pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)> {
-    use crossterm::{
-        event::{DisableMouseCapture, EnableMouseCapture},
-        terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
-    };
     terminal::enable_raw_mode().context("Failed to enable crossterm raw mode")?;
 
     let mut stdout = std::io::stdout();
@@ -18,14 +18,18 @@ pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShu
 
     let cleanup = OnShutdown::new(|| {
         // Be a good terminal citizen...
-        let mut stdout = std::io::stdout();
-        crossterm::execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)
-            .context("Failed to disable crossterm alternate screen and mouse capture")?;
-        terminal::disable_raw_mode().context("Failed to enable crossterm raw mode")?;
-        Ok(())
+        reset_term()
     });
 
     Ok((term, cleanup))
+}
+
+pub fn reset_term() -> Result<()> {
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)
+        .context("Failed to disable crossterm alternate screen and mouse capture")?;
+    terminal::disable_raw_mode().context("Failed to enable crossterm raw mode")?;
+    Ok(())
 }
 
 pub struct OnShutdown {

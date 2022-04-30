@@ -5,9 +5,9 @@ use futures::TryStreamExt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use tokio::{select, sync::mpsc};
-use tracing::{error, warn};
+use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
 
 mod input;
 mod sonos;
@@ -42,7 +42,17 @@ pub enum Update {
 
 #[tokio::main]
 async fn main() {
+    human_panic::setup_panic!();
+    // if a panic happens, we want to reset the terminal first so the backtraces and panic info can
+    // be visible on the screen
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        term::reset_term().unwrap();
+        prev(info);
+    }));
+
     let _guard = init_logger();
+    info!("Welcome to Sinuous!");
 
     // Set the App with clap to accept Command Line Arguments
     let args = Command::new("Sinuous")
@@ -75,7 +85,9 @@ async fn main() {
     }
 
     if let Err(err) = run_app(provided_names, provided_ips).await {
-        error!("Main loop exited with error: {}", err)
+        error!("Main loop exited with error: {}", err);
+    } else {
+        info!("Bye!");
     }
 }
 
@@ -96,6 +108,7 @@ async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Re
 
     let mut events = EventStream::new();
 
+    debug!("Starting main loop...");
     loop {
         select! {
             event = events.try_next() => {
@@ -140,6 +153,7 @@ fn init_logger() -> WorkerGuard {
         .with_writer(appender)
         .with_env_filter(EnvFilter::from_default_env())
         .with_ansi(false)
+        .with_span_events(FmtSpan::FULL)
         .init();
     guard
 }
