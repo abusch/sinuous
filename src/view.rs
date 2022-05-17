@@ -148,7 +148,15 @@ fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Re
 
 fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
     let (np, label, ratio) = if let Some(track) = &state.now_playing {
-        let percent = (track.elapsed() as f64) / (track.duration() as f64);
+        let percent = if track.duration() != 0 {
+            f64::clamp(
+                (track.elapsed() as f64) / (track.duration() as f64),
+                0.0,
+                1.0,
+            )
+        } else {
+            0.0
+        };
         let label = format!(
             "{} / {}",
             format_duration(track.elapsed()),
