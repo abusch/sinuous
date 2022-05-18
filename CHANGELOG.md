@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2022-05-18
+
+### Bug Fixes
+
+- Make sure the ratio of track played stays between 0 and 1
+
+### Documentation
+
+- Add screenshot to README file
+- Update README file
+- Update screenshot
+
+### Features
+
+- Manage groups instead of speakers
+- Remove dead code
+
+### Miscellaneous Tasks
+
+- Don't swallow error if main loop exits abnormally
+- Formatting
+- Improve logging and display of panic info
+
+### Build
+
+- Strip symbols from binary
+- Bump crossterm from 0.23.1 to 0.23.2
+- Bump tracing-subscriber from 0.3.9 to 0.3.10
+- Bump clap from 3.1.6 to 3.1.8
+- Bump tracing-subscriber from 0.3.10 to 0.3.11
+- Bump tracing from 0.1.32 to 0.1.33
+- Bump tracing from 0.1.33 to 0.1.34
+- Bump clap from 3.1.8 to 3.1.9
+- Bump anyhow from 1.0.56 to 1.0.57
+- Bump clap from 3.1.9 to 3.1.12
+- Bump tui from 0.17.0 to 0.18.0
+- Bump tokio from 1.17.0 to 1.18.0
+- Bump tokio from 1.18.0 to 1.18.2
+- Bump clap from 3.1.12 to 3.1.18
+
 ## [0.1.2] - 2022-03-25
 
 ### Ci
