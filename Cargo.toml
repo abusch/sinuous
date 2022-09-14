@@ -9,7 +9,7 @@ repository = "https://github.com/abusch/sinuous.git"
 homepage = "https://github.com/abusch/sinuous"
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.65"
 clap = { version = "3.1", features=["cargo"] }
 crossterm ={ version = "0.23.2", features=["event-stream"] }
 futures = "0.3.21"
