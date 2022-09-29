@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use clap::{crate_authors, crate_version, Arg, Command};
+use clap::{arg, command};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use std::net::Ipv4Addr;
@@ -55,24 +55,21 @@ async fn main() {
     info!("Welcome to Sinuous!");
 
     // Set the App with clap to accept Command Line Arguments
-    let args = Command::new("Sinuous")
-        .version(crate_version!())
-        .author(crate_authors!("\n"))
-        .about("A simple TUI for controlling Sonos speakers")
+    let args = command!()
         .arg(
-            Arg::new("device")
-                .short('d')
-                .long("device")
-                .help("Specify a speaker to connect to. Provide either an Ipv4 Address or a name to search for. Multiple values are possible by seperating them with a comma")
-                .takes_value(true)
-        ).get_matches();
+            arg!(
+                -d --device <device> "Specify a speaker to connect to. Provide either an Ipv4 Address or a name to search for. Multiple values are possible by seperating them with a comma"
+            )
+            .required(false)
+        )
+        .get_matches();
 
     // Set two Vectors: One for provided IPs, one for provided device names
     let mut provided_ips: Vec<Ipv4Addr> = Vec::new();
     let mut provided_names: Vec<String> = Vec::new();
 
     // Iterate over the provided device argument, if present
-    if let Some(provided_device) = args.value_of("device") {
+    if let Some(provided_device) = args.get_one::<String>("device") {
         // Split the device argument by commas and iterate over the single provided devices
         for e in provided_device.split(',') {
             // Try to parse the element into an Ipv4Addr, if not possible accept it as a name
@@ -113,18 +110,14 @@ async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Re
         select! {
             event = events.try_next() => {
                 let event = event?.ok_or_else(|| anyhow!("Failed to receive keyboard input"))?;
-                match event {
-                    Event::Key(key) => {
-                        if input::should_quit(&event) {
-                            break;
-                        }
-                        if let State::Ready(ref speaker_state) = state {
-                            let cmd = view::handle_input(&key, speaker_state);
-                            cmd_tx.send(cmd).await?;
-                        }
+                if let Event::Key(key) = event {
+                    if input::should_quit(&event) {
+                        break;
                     }
-                    Event::Mouse(_mouse) => {},
-                    Event::Resize(_, _) => {},
+                    if let State::Ready(ref speaker_state) = state {
+                        let cmd = view::handle_input(&key, speaker_state);
+                        cmd_tx.send(cmd).await?;
+                    }
                 }
             }
             update = update_rx.recv() => match update {

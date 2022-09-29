@@ -10,8 +10,8 @@ homepage = "https://github.com/abusch/sinuous"
 
 [dependencies]
 anyhow = "1.0.57"
-clap = { version = "3.1", features=["cargo"] }
-crossterm ={ version = "0.23.2", features=["event-stream"] }
+clap = { version = "4.0", features=["cargo"] }
+crossterm ={ version = "0.25", features=["event-stream"] }
 futures = "0.3.21"
 human-panic = "1.0.3"
 sonor = "1.1.0"
@@ -21,7 +21,7 @@ tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter", "tracing-log"] }
 
 [dependencies.tui]
-version = "0.18.0"
+version = "0.19"
 default-features = false
 features = ["crossterm"]
 
