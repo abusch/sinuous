@@ -49,39 +49,19 @@ jobs:
             features: ''
     steps:
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
-          override: true
           target: ${{ matrix.target }}
-          profile: minimal
-      # - name: Install macOS dependencies
-      #   if: matrix.os == 'macos-latest'
-      #   run: brew install portaudio pkg-config
       - name: Set up cross compilation
         if: matrix.cross_arch
         run: |
           dpkg --add-architecture ${{ matrix.cross_arch }}
           echo "PKG_CONFIG_PATH=${{ matrix.pkg_config_path }}" >> $GITHUB_ENV
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-      # - name: Install Linux dependencies
-      #   if: startsWith(matrix.build_target, 'linux-')
-      #   run: |
-      #     apt update
-      #     apt install -y ${{ matrix.dependencies }}
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         name: Checkout src
-      - uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Running cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
       - name: Extract git tag
         shell: bash
         run: echo "##[set-output name=tag;]$(echo ${GITHUB_REF#refs/tags/})"

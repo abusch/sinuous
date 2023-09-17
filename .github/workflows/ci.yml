@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  check-macos:
+  check:
     name: Checking ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -31,37 +31,21 @@ jobs:
             features: ''
     steps:
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
-          override: true
           target: ${{ matrix.target }}
-          profile: minimal
-      # - name: Install macOS dependencies
-      #   if: matrix.os == 'macos-latest'
-      #   run: brew install portaudio pkg-config
-      # - name: Install Linux dependencies
-      #   if: matrix.os == 'ubuntu-latest'
-      #   run: |
-      #     sudo apt update
-      #     sudo apt install libpulse-dev libdbus-1-dev libncursesw5-dev libxcb-shape0-dev libxcb-xfixes0-dev
-      - uses: actions/checkout@v2
-        name: Checkout src
-      - uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Checkout src
+        uses: actions/checkout@v4
       - name: Running cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo check --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: Rustfmt check
+        uses: actions-rust-lang/rustfmt@v1
