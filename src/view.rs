@@ -10,7 +10,7 @@ use tui::{
     },
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
-    text::{Span, Spans},
+    text::{Line, Span},
     widgets::{
         Block, BorderType::Rounded, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs,
     },
@@ -73,7 +73,7 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
         .constraints(vec![Constraint::Min(1), Constraint::Length(8)])
         .split(area);
 
-    let header = vec![Spans::from(vec![
+    let header = vec![Line::from(vec![
         Span::styled(
             format!("Sinuous {}", crate_version!()),
             Style::default()
@@ -93,7 +93,7 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
 }
 
 fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
-    let names = state.group_names.iter().cloned().map(Spans::from).collect();
+    let names = state.group_names.iter().cloned().map(Line::from).collect();
     let tabs = Tabs::new(names)
         .block(
             Block::default()
