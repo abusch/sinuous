@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2023-09-17
+
+### Bug Fixes
+
+- Update sonor and other dependencies
+
+### Miscellaneous Tasks
+
+- Upgrade some dependencies
+- Upgrade dependencies
+
 ## [0.1.3] - 2022-05-18
 
 ### Bug Fixes
