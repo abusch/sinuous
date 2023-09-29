@@ -13,7 +13,7 @@ anyhow = "1.0.57"
 clap = { version = "4.0", features = ["cargo"] }
 crossterm = { version = "0.27", features = ["event-stream"] }
 futures = "0.3.21"
-human-panic = "1.0.3"
+human-panic = "1.2.1"
 sonor = "2"
 tokio = { version = "1.18.2", features = ["full"] }
 tracing = "0.1.34"
