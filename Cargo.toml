@@ -12,7 +12,7 @@ homepage = "https://github.com/abusch/sinuous"
 anyhow = "1.0.57"
 clap = { version = "4.0", features = ["cargo"] }
 crossterm = { version = "0.27", features = ["event-stream"] }
-futures = "0.3.21"
+futures = "0.3.29"
 human-panic = "1.0.3"
 sonor = "2"
 tokio = { version = "1.18.2", features = ["full"] }
