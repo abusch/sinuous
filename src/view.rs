@@ -1,46 +1,39 @@
 use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui::{
-    backend::Backend,
     layout::{
         Alignment::{Center, Right},
-        Constraint,
-        Direction::{Horizontal, Vertical},
-        Layout, Rect,
+        Constraint, Layout, Rect,
     },
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
     text::{Line, Span},
-    widgets::{
-        Block, BorderType::Rounded, Borders, Gauge, List, ListItem, ListState, Paragraph, Tabs,
-    },
+    widgets::{Block, BorderType::Rounded, Gauge, List, ListItem, ListState, Paragraph, Tabs},
     Frame,
 };
 
 use crate::{sonos::SpeakerState, Action};
 
-pub fn render_ui<B: Backend>(frame: &mut Frame<B>, state: &SpeakerState) {
-    let chunks = Layout::default()
-        .direction(Vertical)
-        .constraints(vec![
-            Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(1),
-        ])
-        .split(frame.size());
+pub fn render_ui(frame: &mut Frame, state: &SpeakerState) {
+    let [title, tabs, playbar, queue] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(1),
+    ])
+    .areas(frame.size());
 
     // Title line
-    render_title_bar(state, frame, chunks[0]);
+    render_title_bar(state, frame, title);
 
     // Group tabs
-    render_tabs(state, frame, chunks[1]);
+    render_tabs(state, frame, tabs);
 
     // playbar
-    render_playbar(state, frame, chunks[2]);
+    render_playbar(state, frame, playbar);
 
     // queue
-    render_queue(state, frame, chunks[3]);
+    render_queue(state, frame, queue);
 }
 
 pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
@@ -67,11 +60,9 @@ pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
     }
 }
 
-fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Horizontal)
-        .constraints(vec![Constraint::Min(1), Constraint::Length(8)])
-        .split(area);
+fn render_title_bar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
+    let [title_area, volume_area] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(area);
 
     let header = vec![Line::from(vec![
         Span::styled(
@@ -85,22 +76,16 @@ fn render_title_bar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area
         Span::styled(state.group_name(), Style::default().fg(Color::Green)),
     ])];
     let title = Paragraph::new(header);
-    frame.render_widget(title, chunks[0]);
+    frame.render_widget(title, title_area);
 
     let vol_text = format!("🔊: {:2} ", state.current_volume);
     let vol = Paragraph::new(vol_text).alignment(Right);
-    frame.render_widget(vol, chunks[1]);
+    frame.render_widget(vol, volume_area);
 }
 
-fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
-    let names = state.group_names.iter().cloned().map(Line::from).collect();
-    let tabs = Tabs::new(names)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(Rounded)
-                .title(" Groups "),
-        )
+fn render_tabs(state: &SpeakerState, frame: &mut Frame, area: Rect) {
+    let tabs = Tabs::new(state.group_names.iter().cloned())
+        .block(Block::bordered().border_type(Rounded).title(" Groups "))
         .highlight_style(Style::default().fg(Color::Green))
         .select(state.selected_group)
         .divider(VERTICAL);
@@ -108,7 +93,7 @@ fn render_tabs<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rec
     frame.render_widget(tabs, area);
 }
 
-fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
+fn render_queue(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     // Select the currently playing track in the queue (if any)
     let mut list_state = ListState::default();
     let selection = state.now_playing.as_ref().and_then(|track| {
@@ -119,34 +104,25 @@ fn render_queue<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Re
     });
     list_state.select(selection);
 
-    let items = state
-        .queue
-        .iter()
-        .map(|t| {
-            let s = format!(
-                "{} - {} - {} ({})",
-                t.creator().unwrap_or("Unknown"),
-                t.album().unwrap_or("Unknown"),
-                t.title(),
-                format_duration(t.duration().unwrap_or(0))
-            );
-            ListItem::new(s)
-        })
-        .collect::<Vec<_>>();
+    let items = state.queue.iter().map(|t| {
+        let s = format!(
+            "{} - {} - {} ({})",
+            t.creator().unwrap_or("Unknown"),
+            t.album().unwrap_or("Unknown"),
+            t.title(),
+            format_duration(t.duration().unwrap_or(0))
+        );
+        ListItem::new(s)
+    });
     let list = List::new(items)
         .highlight_style(Style::default().fg(Color::LightMagenta))
         .highlight_symbol("⏵")
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Queue ")
-                .border_type(Rounded),
-        );
+        .block(Block::bordered().title(" Queue ").border_type(Rounded));
 
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: Rect) {
+fn render_playbar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     let (np, label, ratio) = if let Some(track) = &state.now_playing {
         let percent = if track.duration() != 0 {
             f64::clamp(
@@ -178,18 +154,13 @@ fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: 
     };
 
     // Border around the whole playbar section
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(Rounded)
-        .title(np);
+    let block = Block::bordered().border_type(Rounded).title(np);
     // The inner area is where the gauge and control buttons will be rendered
     let playbar_area = block.inner(area);
 
     // split the inner area into 2 columns for the buttons and the gauge
-    let playbar_chunks = Layout::default()
-        .direction(Horizontal)
-        .constraints(vec![Constraint::Length(3), Constraint::Min(1)])
-        .split(playbar_area);
+    let [symbol_area, bar_area] =
+        Layout::horizontal([Constraint::Length(3), Constraint::Min(1)]).areas(playbar_area);
 
     let media_symbol = if state.is_playing { "⏵" } else { "⏸" };
     let symbol = Paragraph::new(media_symbol).alignment(Center);
@@ -207,8 +178,8 @@ fn render_playbar<B: Backend>(state: &SpeakerState, frame: &mut Frame<B>, area: 
 
     // render all the widgets
     frame.render_widget(block, area);
-    frame.render_widget(symbol, playbar_chunks[0]);
-    frame.render_widget(playbar, playbar_chunks[1]);
+    frame.render_widget(symbol, symbol_area);
+    frame.render_widget(playbar, bar_area);
 }
 
 fn format_duration(secs: u32) -> String {
