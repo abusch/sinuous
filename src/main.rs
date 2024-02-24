@@ -47,7 +47,7 @@ async fn main() {
     // be visible on the screen
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        term::reset_term().unwrap();
+        term::reset().unwrap();
         prev(info);
     }));
 
@@ -101,7 +101,7 @@ async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Re
     sonos.start((provided_ips, provided_names));
 
     // Initialize the terminal user interface.
-    let (mut terminal, _cleanup) = term::init_crossterm()?;
+    let (mut terminal, _cleanup) = term::init()?;
 
     let mut events = EventStream::new();
 

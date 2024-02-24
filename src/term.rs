@@ -7,7 +7,7 @@ use crossterm::{
 };
 use tui::{backend::CrosstermBackend, Terminal};
 
-pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)> {
+pub fn init() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)> {
     terminal::enable_raw_mode().context("Failed to enable crossterm raw mode")?;
 
     let mut stdout = std::io::stdout();
@@ -18,13 +18,13 @@ pub fn init_crossterm() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShu
 
     let cleanup = OnShutdown::new(|| {
         // Be a good terminal citizen...
-        reset_term()
+        reset()
     });
 
     Ok((term, cleanup))
 }
 
-pub fn reset_term() -> Result<()> {
+pub fn reset() -> Result<()> {
     let mut stdout = std::io::stdout();
     crossterm::execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)
         .context("Failed to disable crossterm alternate screen and mouse capture")?;

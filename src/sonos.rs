@@ -191,18 +191,18 @@ impl SonosService {
 async fn get_speakers(provided_devices: (Vec<Ipv4Addr>, Vec<String>)) -> Result<Vec<Speaker>> {
     let mut speakers: Vec<Speaker> = vec![];
     debug!("Connecting to provided speakers...");
-    for e in provided_devices.0.iter() {
+    for e in &provided_devices.0 {
         if let Some(spk) = sonor::Speaker::from_ip(*e).await.unwrap_or(None) {
             speakers.push(spk);
         } else {
-            debug!("Not connecting to {} due to errors", e);
+            debug!("Not connecting to {e} due to errors");
         }
     }
-    for e in provided_devices.1.iter() {
+    for e in &provided_devices.1 {
         if let Some(device) = sonor::find(e, Duration::from_secs(2)).await? {
             speakers.push(device);
         } else {
-            debug!("Not connecting to {} due to errors", e);
+            debug!("Not connecting to {e} due to errors");
         }
     }
     if provided_devices.0.is_empty() && provided_devices.1.is_empty() {
@@ -243,7 +243,7 @@ impl SpeakerGroup {
     }
 
     fn name(&self) -> String {
-        let names: Vec<_> = self.speakers.iter().map(|s| s.name()).collect();
+        let names: Vec<_> = self.speakers.iter().map(SpeakerInfo::name).collect();
         names.join(" + ")
     }
 }

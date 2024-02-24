@@ -126,7 +126,7 @@ fn render_playbar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     let (np, label, ratio) = if let Some(track) = &state.now_playing {
         let percent = if track.duration() != 0 {
             f64::clamp(
-                (track.elapsed() as f64) / (track.duration() as f64),
+                f64::from(track.elapsed()) / f64::from(track.duration()),
                 0.0,
                 1.0,
             )
@@ -186,5 +186,5 @@ fn format_duration(secs: u32) -> String {
     let minutes = secs / 60;
     let seconds = secs % 60;
 
-    format!("{}:{:02}", minutes, seconds)
+    format!("{minutes}:{seconds:02}")
 }
