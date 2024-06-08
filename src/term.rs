@@ -5,7 +5,7 @@ use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use tui::{backend::CrosstermBackend, Terminal};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub fn init() -> Result<(Terminal<CrosstermBackend<io::Stdout>>, OnShutdown)> {
     terminal::enable_raw_mode().context("Failed to enable crossterm raw mode")?;

@@ -1,6 +1,6 @@
 use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tui::{
+use ratatui::{
     layout::{
         Alignment::{Center, Right},
         Constraint, Layout, Rect,
