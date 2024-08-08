@@ -11,10 +11,10 @@ homepage = "https://github.com/abusch/sinuous"
 [dependencies]
 anyhow = "1.0.57"
 clap = { version = "4.0", features = ["cargo"] }
-crossterm = { version = "0.27", features = ["event-stream"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3.21"
 human-panic = "2.0.0"
-ratatui = "0.26"
+ratatui = "0.28"
 reqwest = { version = "0.12" }
 serde = "1"
 serde_derive = "1"

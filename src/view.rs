@@ -21,7 +21,7 @@ pub fn render_ui(frame: &mut Frame, state: &SpeakerState) {
         Constraint::Length(3),
         Constraint::Min(1),
     ])
-    .areas(frame.size());
+    .areas(frame.area());
 
     // Title line
     render_title_bar(state, frame, title);
