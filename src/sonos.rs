@@ -1,20 +1,17 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::TryStreamExt;
-use sonor::SpeakerInfo;
-use sonor::{Speaker, Track, TrackInfo};
+use sonor::{Speaker, SpeakerInfo, Track, TrackInfo};
 use std::net::Ipv4Addr;
-use tokio::select;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
-use tracing::info;
-use tracing::{debug, error, warn};
+use tokio::{
+    select,
+    sync::mpsc::{Receiver, Sender},
+};
+use tracing::{debug, error, info, warn};
 
-use crate::Action;
-use crate::Update;
+use crate::{Action, Update};
 
 #[derive(Debug)]
 pub struct SpeakerState {

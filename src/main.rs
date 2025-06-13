@@ -1,17 +1,18 @@
-use anyhow::{anyhow, Result};
+use std::net::Ipv4Addr;
+use std::str::FromStr;
+
+use anyhow::{Result, anyhow};
 use clap::{arg, command};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
-use std::net::Ipv4Addr;
-use std::str::FromStr;
+use ratatui::DefaultTerminal;
 use tokio::{select, sync::mpsc};
 use tracing::{debug, error, info, warn};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 mod input;
 mod sonos;
-mod term;
 mod view;
 
 use crate::sonos::SpeakerState;
@@ -43,13 +44,6 @@ pub enum Update {
 #[tokio::main]
 async fn main() {
     human_panic::setup_panic!();
-    // if a panic happens, we want to reset the terminal first so the backtraces and panic info can
-    // be visible on the screen
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        term::reset().unwrap();
-        prev(info);
-    }));
 
     let _guard = init_logger();
     info!("Welcome to Sinuous!");
@@ -81,14 +75,22 @@ async fn main() {
         }
     }
 
-    if let Err(err) = run_app(provided_names, provided_ips).await {
+    // Initialize the terminal user interface.
+    let mut terminal = ratatui::init();
+
+    if let Err(err) = run_app(&mut terminal, provided_names, provided_ips).await {
         error!("Main loop exited with error: {}", err);
     } else {
         info!("Bye!");
     }
+    ratatui::restore();
 }
 
-async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Result<()> {
+async fn run_app(
+    terminal: &mut DefaultTerminal,
+    provided_names: Vec<String>,
+    provided_ips: Vec<Ipv4Addr>,
+) -> Result<()> {
     let mut state = State::Connecting;
 
     // Channel used to send SpeakerState updates from SonosService to the UI
@@ -99,9 +101,6 @@ async fn run_app(provided_names: Vec<String>, provided_ips: Vec<Ipv4Addr>) -> Re
     // Background service handling all the Sonos stuff
     let sonos = sonos::SonosService::new(update_tx, cmd_rx);
     sonos.start((provided_ips, provided_names));
-
-    // Initialize the terminal user interface.
-    let (mut terminal, _cleanup) = term::init()?;
 
     let mut events = EventStream::new();
 
