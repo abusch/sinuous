@@ -2,7 +2,7 @@
 name = "sinuous"
 version = "0.1.4"
 authors = ["Antoine Busch <antoine.busch@gmail.com>"]
-edition = "2021"
+edition = "2024"
 description = "A simple TUI for controlling local Sonos speakers"
 license = "MIT"
 repository = "https://github.com/abusch/sinuous.git"
