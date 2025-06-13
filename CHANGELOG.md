@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5](https://github.com/abusch/sinuous/compare/v0.1.4...v0.1.5) - 2025-06-13
+
+### Other
+
+- fix CI link in README.md
+- Update more dependencies...
+- Switch CI to release-plz
+- Upgrade dependencies
+- Update dependabot.yml
+- Upgrade ratatui/crossterm
+- Don't rename ratatui package
+- run cargo update
+- *(deps)* bump human-panic from 1.2.3 to 2.0.0
+- fix some clippy warnings
+- Upgrade ratatui
+- Update ci.yml/cd.yml
+
 ## [0.1.4] - 2023-09-17
 
 ### Bug Fixes
