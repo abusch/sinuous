@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6](https://github.com/abusch/sinuous/compare/v0.1.5...v0.1.6) - 2025-06-14
+
+### Added
+
+- *(ci)* Add workflow to build binaries
+
+### Other
+
+- split out app code into App struct
+- Use ratatui init() and restore()
+- *(ci)* Make dependabot track github actions
+
 ## [0.1.5](https://github.com/abusch/sinuous/compare/v0.1.4...v0.1.5) - 2025-06-13
 
 ### Other
