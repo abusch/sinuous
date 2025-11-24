@@ -16,6 +16,18 @@ pub enum State {
     Connecting,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Queue,
+    Favorites,
+}
+
+#[derive(Debug)]
+pub enum Direction {
+    Up,
+    Down,
+}
+
 #[derive(Debug)]
 pub enum Action {
     Play,
@@ -25,6 +37,9 @@ pub enum Action {
     NextSpeaker,
     PrevSpeaker,
     VolAdjust(i16),
+    SwitchView(ViewMode),
+    NavigateFavorites(Direction),
+    PlayFavorite(usize),
     Nop,
 }
 
