@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
@@ -140,7 +140,7 @@ impl SonosService {
                 cmd = self.cmd_rx.recv() => {
                     if let Some(c) = cmd {
                         let mut needs_refresh = false;
-                        
+
                         // Process the first command
                         match self.handle_command(c).await {
                             Ok(r) => if r { needs_refresh = true; },
@@ -155,10 +155,8 @@ impl SonosService {
                             }
                         }
 
-                        if needs_refresh {
-                            if let Err(e) = self.refresh_state().await {
-                                warn!("Failed to refresh state after commands: {}", e);
-                            }
+                        if needs_refresh && let Err(e) = self.refresh_state().await {
+                            warn!("Failed to refresh state after commands: {}", e);
                         }
                     } else {
                         warn!("Command channel was closed: exiting...");
@@ -264,8 +262,7 @@ impl SonosService {
 <EnqueuedURIMetaData>{}</EnqueuedURIMetaData>
 <DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued>
 <EnqueueAsNext>1</EnqueueAsNext>"#,
-                            favorite.uri,
-                            favorite.metadata
+                            favorite.uri, favorite.metadata
                         );
 
                         match speaker.action(&service, "AddURIToQueue", &payload).await {
@@ -284,7 +281,9 @@ impl SonosService {
                     } else {
                         // For individual tracks, use queue_next
                         debug!("Using queue_next for track...");
-                        speaker.queue_next(&unescaped_uri, &unescaped_metadata).await?;
+                        speaker
+                            .queue_next(&unescaped_uri, &unescaped_metadata)
+                            .await?;
                         speaker.next().await?;
                         info!("Successfully started playing: {}", favorite.title);
                     }
@@ -302,11 +301,15 @@ impl SonosService {
     }
 
     async fn refresh_state(&mut self) -> Result<()> {
-        let uuid = self.groups.get(self.selected_group)
+        let uuid = self
+            .groups
+            .get(self.selected_group)
             .map(|g| g.coordinator.clone())
             .context("No selected group")?;
-            
-        let speaker = self.speakers_by_uuid.get(&uuid)
+
+        let speaker = self
+            .speakers_by_uuid
+            .get(&uuid)
             .context("Speaker not found")?
             .clone();
 
@@ -465,13 +468,7 @@ fn parse_favorite_playlists(xml: &str) -> Vec<FavoritePlaylist> {
     for item in items {
         // Extract URI from <res> tag
         let uri = extract_tag_content(item, "<res", "</res>")
-            .and_then(|res_block| {
-                if let Some(start) = res_block.find('>') {
-                    Some(&res_block[start + 1..])
-                } else {
-                    None
-                }
-            })
+            .and_then(|res_block| res_block.find('>').map(|start| &res_block[start + 1..]))
             .unwrap_or("");
 
         // Filter for playlists only (check URI patterns and upnp:class)
