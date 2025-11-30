@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6](https://github.com/abusch/sinuous/compare/v0.1.5...v0.1.6) - 2025-11-30
+
+### Added
+
+- add Sonos favorites playlists support
+- *(ci)* Add workflow to build binaries
+
+### Other
+
+- Fix some clippy warnings
+- Update dependencies
+- *(deps)* bump actions/checkout from 5 to 6
+- *(deps)* bump actions/checkout from 4 to 5
+- split out app code into App struct
+- Use ratatui init() and restore()
+- *(ci)* Make dependabot track github actions
+
 ## [0.1.5](https://github.com/abusch/sinuous/compare/v0.1.4...v0.1.5) - 2025-06-13
 
 ### Other
