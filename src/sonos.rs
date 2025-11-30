@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
-use sonor::{Speaker, SpeakerInfo, Track, TrackInfo};
+use sonor::{Speaker, SpeakerInfo, Track, TrackInfo, URN};
 use std::net::Ipv4Addr;
 use tokio::{
     select,
@@ -11,7 +12,15 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::{Action, Update};
+use crate::{Action, Direction, Update, ViewMode};
+
+#[derive(Debug, Clone)]
+pub struct FavoritePlaylist {
+    pub title: String,
+    pub description: String,
+    pub uri: String,
+    pub metadata: String,
+}
 
 #[derive(Debug)]
 pub struct SpeakerState {
@@ -19,8 +28,11 @@ pub struct SpeakerState {
     pub current_volume: u16,
     pub group_names: Vec<String>,
     pub selected_group: usize,
-    pub now_playing: Option<TrackInfo>,
-    pub queue: Vec<Track>,
+    pub now_playing: Option<Arc<TrackInfo>>,
+    pub queue: Arc<Vec<Track>>,
+    pub current_view: ViewMode,
+    pub favorites: Vec<FavoritePlaylist>,
+    pub selected_favorite: usize,
 }
 
 impl SpeakerState {
@@ -35,6 +47,14 @@ pub struct SonosService {
     speakers_by_uuid: BTreeMap<String, Speaker>,
     groups: Vec<SpeakerGroup>,
     selected_group: usize,
+    current_view: ViewMode,
+    favorites: Vec<FavoritePlaylist>,
+    selected_favorite: usize,
+    // Cached state
+    cached_is_playing: bool,
+    cached_volume: u16,
+    cached_now_playing: Option<Arc<TrackInfo>>,
+    cached_queue: Arc<Vec<Track>>,
 }
 
 impl SonosService {
@@ -45,6 +65,13 @@ impl SonosService {
             speakers_by_uuid: BTreeMap::new(),
             groups: vec![],
             selected_group: 0,
+            current_view: ViewMode::Queue,
+            favorites: vec![],
+            selected_favorite: 0,
+            cached_is_playing: false,
+            cached_volume: 0,
+            cached_now_playing: None,
+            cached_queue: Arc::new(vec![]),
         }
     }
 
@@ -74,12 +101,29 @@ impl SonosService {
         let groups = speaker.zone_group_state().await?;
         debug!("Found {} groups", groups.len());
 
+        // Fetch favorites from the speaker (before moving speakers_by_uuid)
+        debug!("Fetching favorites...");
+        match fetch_favorite_playlists(speaker).await {
+            Ok(favs) => {
+                info!("Found {} favorite playlists", favs.len());
+                self.favorites = favs;
+            }
+            Err(e) => {
+                warn!("Failed to fetch favorites: {}", e);
+            }
+        }
+
         let group_list = groups
             .into_iter()
             .map(|(uuid, speaker_list)| SpeakerGroup::new(uuid, speaker_list))
             .collect::<Vec<_>>();
         self.groups = group_list;
         self.speakers_by_uuid = speakers_by_uuid;
+
+        // Initial state fetch
+        if let Err(e) = self.refresh_state().await {
+            warn!("Failed to fetch initial state: {}", e);
+        }
 
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         debug!("Starting sonos loop");
@@ -88,11 +132,34 @@ impl SonosService {
             select! {
                 _tick = ticker.tick() => {
                     // time to refresh our state
+                    if let Err(e) = self.refresh_state().await {
+                        warn!("Failed to refresh state: {}", e);
+                    }
                     self.send_update().await;
                 }
                 cmd = self.cmd_rx.recv() => {
                     if let Some(c) = cmd {
-                        self.handle_command(c).await.unwrap_or_else(|e| warn!("{}", e));
+                        let mut needs_refresh = false;
+                        
+                        // Process the first command
+                        match self.handle_command(c).await {
+                            Ok(r) => if r { needs_refresh = true; },
+                            Err(e) => warn!("Error handling command: {}", e),
+                        }
+
+                        // Drain pending commands
+                        while let Ok(c) = self.cmd_rx.try_recv() {
+                            match self.handle_command(c).await {
+                                Ok(r) => if r { needs_refresh = true; },
+                                Err(e) => warn!("Error handling batched command: {}", e),
+                            }
+                        }
+
+                        if needs_refresh {
+                            if let Err(e) = self.refresh_state().await {
+                                warn!("Failed to refresh state after commands: {}", e);
+                            }
+                        }
                     } else {
                         warn!("Command channel was closed: exiting...");
                         break;
@@ -104,30 +171,154 @@ impl SonosService {
         Ok(())
     }
 
-    async fn handle_command(&mut self, cmd: Action) -> Result<()> {
+    async fn handle_command(&mut self, cmd: Action) -> Result<bool> {
         debug!(?cmd, "Handling command");
-        let current_speaker = self.current_speaker().context("No selected group")?;
         match cmd {
-            Action::Play => current_speaker.play().await,
-            Action::Pause => current_speaker.pause().await,
-            Action::Next => current_speaker.next().await,
-            Action::Prev => current_speaker.previous().await,
-            Action::VolAdjust(v) => current_speaker.set_volume_relative(v).await.map(drop),
+            // Playback controls
+            Action::Play => {
+                let speaker = self.current_speaker().context("No selected group")?;
+                speaker.play().await?;
+                Ok(true)
+            }
+            Action::Pause => {
+                let speaker = self.current_speaker().context("No selected group")?;
+                speaker.pause().await?;
+                Ok(true)
+            }
+            Action::Next => {
+                let speaker = self.current_speaker().context("No selected group")?;
+                speaker.next().await?;
+                Ok(true)
+            }
+            Action::Prev => {
+                let speaker = self.current_speaker().context("No selected group")?;
+                speaker.previous().await?;
+                Ok(true)
+            }
+            Action::VolAdjust(v) => {
+                let speaker = self.current_speaker().context("No selected group")?;
+                speaker.set_volume_relative(v).await.map(drop)?;
+                Ok(true)
+            }
+
+            // Group switching
             Action::NextSpeaker => {
                 self.select_next_group();
-                Ok(())
+                Ok::<bool, anyhow::Error>(true)
             }
             Action::PrevSpeaker => {
                 self.select_prev_group();
-                Ok(())
+                Ok::<bool, anyhow::Error>(true)
             }
-            Action::Nop => Ok(()), // Nop
+
+            // View switching
+            Action::SwitchView(view_mode) => {
+                self.current_view = view_mode;
+                Ok(false)
+            }
+
+            // Favorites navigation
+            Action::NavigateFavorites(direction) => {
+                match direction {
+                    Direction::Up => {
+                        if self.selected_favorite > 0 {
+                            self.selected_favorite -= 1;
+                        }
+                    }
+                    Direction::Down => {
+                        if self.selected_favorite < self.favorites.len().saturating_sub(1) {
+                            self.selected_favorite += 1;
+                        }
+                    }
+                }
+                Ok(false)
+            }
+
+            // Play favorite
+            Action::PlayFavorite(index) => {
+                if let Some(favorite) = self.favorites.get(index) {
+                    info!("Attempting to play favorite: {}", favorite.title);
+                    debug!("Favorite URI: {}", favorite.uri);
+
+                    let speaker = self.current_speaker().context("No selected group")?;
+
+                    // Clear the queue first
+                    debug!("Clearing queue...");
+                    if let Err(e) = speaker.clear_queue().await {
+                        warn!("Failed to clear queue: {}", e);
+                    }
+
+                    // Try different approaches based on URI type
+                    let unescaped_uri = html_unescape(&favorite.uri);
+                    let unescaped_metadata = html_unescape(&favorite.metadata);
+
+                    debug!("Unescaped URI: {}", unescaped_uri);
+
+                    // For containers (playlists), use AddURIToQueue
+                    if unescaped_uri.starts_with("x-rincon-cpcontainer:") {
+                        debug!("Using AddURIToQueue for container...");
+                        let service = URN::service("schemas-upnp-org", "AVTransport", 1);
+                        let payload = format!(
+                            r#"<InstanceID>0</InstanceID>
+<EnqueuedURI>{}</EnqueuedURI>
+<EnqueuedURIMetaData>{}</EnqueuedURIMetaData>
+<DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued>
+<EnqueueAsNext>1</EnqueueAsNext>"#,
+                            favorite.uri,
+                            favorite.metadata
+                        );
+
+                        match speaker.action(&service, "AddURIToQueue", &payload).await {
+                            Ok(_) => {
+                                debug!("AddURIToQueue succeeded");
+                                // Start playback
+                                debug!("Starting playback...");
+                                speaker.play().await?;
+                                info!("Successfully started playing: {}", favorite.title);
+                            }
+                            Err(e) => {
+                                error!("AddURIToQueue failed: {:?}", e);
+                                return Err(e).context("Failed to add playlist to queue");
+                            }
+                        }
+                    } else {
+                        // For individual tracks, use queue_next
+                        debug!("Using queue_next for track...");
+                        speaker.queue_next(&unescaped_uri, &unescaped_metadata).await?;
+                        speaker.next().await?;
+                        info!("Successfully started playing: {}", favorite.title);
+                    }
+
+                    Ok(true)
+                } else {
+                    warn!("Invalid favorite index: {}", index);
+                    Ok(false)
+                }
+            }
+
+            Action::Nop => Ok(false),
         }
         .context("Error while handling command")
     }
 
+    async fn refresh_state(&mut self) -> Result<()> {
+        let uuid = self.groups.get(self.selected_group)
+            .map(|g| g.coordinator.clone())
+            .context("No selected group")?;
+            
+        let speaker = self.speakers_by_uuid.get(&uuid)
+            .context("Speaker not found")?
+            .clone();
+
+        self.cached_is_playing = speaker.is_playing().await?;
+        self.cached_volume = speaker.volume().await?;
+        self.cached_now_playing = speaker.track().await?.map(Arc::new);
+        self.cached_queue = Arc::new(speaker.queue().await?);
+        Ok(())
+    }
+
     async fn send_update(&self) {
-        match self.get_state().await {
+        match self.build_state() {
             Ok(speaker_state) => {
                 if let Err(err) = self
                     .update_tx
@@ -137,7 +328,7 @@ impl SonosService {
                     warn!(%err, "Updates channel was closed: exiting");
                 }
             }
-            Err(err) => warn!(%err, "Failed to get state from speaker"),
+            Err(err) => warn!(%err, "Failed to build state"),
         }
     }
 
@@ -163,24 +354,22 @@ impl SonosService {
             .and_then(|group| self.speakers_by_uuid.get(&group.coordinator))
     }
 
-    async fn get_state(&self) -> Result<SpeakerState> {
-        let speaker = self.current_speaker().context("No selected group")?;
-        let is_playing = speaker.is_playing().await?;
-        let current_volume = speaker.volume().await?;
-        let current_track = speaker.track().await?;
-        let queue = speaker.queue().await?;
+    fn build_state(&self) -> Result<SpeakerState> {
         let mut names = vec![];
         for group in &self.groups {
             names.push(group.name());
         }
 
         Ok(SpeakerState {
-            is_playing,
-            current_volume,
+            is_playing: self.cached_is_playing,
+            current_volume: self.cached_volume,
             group_names: names,
             selected_group: self.selected_group,
-            now_playing: current_track,
-            queue,
+            now_playing: self.cached_now_playing.clone(),
+            queue: self.cached_queue.clone(),
+            current_view: self.current_view,
+            favorites: self.favorites.clone(),
+            selected_favorite: self.selected_favorite,
         })
     }
 }
@@ -243,4 +432,91 @@ impl SpeakerGroup {
         let names: Vec<_> = self.speakers.iter().map(SpeakerInfo::name).collect();
         names.join(" + ")
     }
+}
+
+async fn fetch_favorite_playlists(speaker: &Speaker) -> Result<Vec<FavoritePlaylist>> {
+    let service = URN::service("schemas-upnp-org", "ContentDirectory", 1);
+
+    let payload = r#"<ObjectID>FV:2</ObjectID>
+<BrowseFlag>BrowseDirectChildren</BrowseFlag>
+<Filter>*</Filter>
+<StartingIndex>0</StartingIndex>
+<RequestedCount>100</RequestedCount>
+<SortCriteria></SortCriteria>"#;
+
+    let response = speaker
+        .action(&service, "Browse", payload)
+        .await
+        .context("Failed to browse favorites")?;
+
+    let xml = response
+        .get("Result")
+        .context("No Result in browse response")?;
+
+    Ok(parse_favorite_playlists(xml))
+}
+
+fn parse_favorite_playlists(xml: &str) -> Vec<FavoritePlaylist> {
+    let mut playlists = Vec::new();
+
+    // Split XML into individual items
+    let items: Vec<&str> = xml.split("<item ").skip(1).collect();
+
+    for item in items {
+        // Extract URI from <res> tag
+        let uri = extract_tag_content(item, "<res", "</res>")
+            .and_then(|res_block| {
+                if let Some(start) = res_block.find('>') {
+                    Some(&res_block[start + 1..])
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+
+        // Filter for playlists only (check URI patterns and upnp:class)
+        let is_playlist = uri.contains("playlist")
+            || uri.starts_with("x-rincon-cpcontainer:")
+            || item.contains("playlistContainer");
+
+        if !is_playlist {
+            continue;
+        }
+
+        let title = extract_tag_content(item, "<dc:title>", "</dc:title>")
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let description = extract_tag_content(item, "<r:description>", "</r:description>")
+            .unwrap_or("")
+            .to_string();
+
+        let metadata = extract_tag_content(item, "<r:resMD>", "</r:resMD>")
+            .unwrap_or("")
+            .to_string();
+
+        playlists.push(FavoritePlaylist {
+            title,
+            description,
+            uri: uri.to_string(),
+            metadata,
+        });
+    }
+
+    playlists
+}
+
+fn extract_tag_content<'a>(text: &'a str, start_tag: &str, end_tag: &str) -> Option<&'a str> {
+    let start = text.find(start_tag)?;
+    let content_start = start + start_tag.len();
+    let end = text[content_start..].find(end_tag)?;
+    Some(&text[content_start..content_start + end])
+}
+
+fn html_unescape(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
 }
