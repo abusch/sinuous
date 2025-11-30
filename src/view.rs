@@ -1,6 +1,7 @@
 use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{
         Alignment::{Center, Right},
         Constraint, Layout, Rect,
@@ -9,10 +10,9 @@ use ratatui::{
     symbols::line::VERTICAL,
     text::{Line, Span},
     widgets::{Block, BorderType::Rounded, Gauge, List, ListItem, ListState, Paragraph, Tabs},
-    Frame,
 };
 
-use crate::{sonos::SpeakerState, Action, Direction, ViewMode};
+use crate::{Action, Direction, ViewMode, sonos::SpeakerState};
 
 pub fn render_ui(frame: &mut Frame, state: &SpeakerState) {
     let [title, tabs, playbar, view_tabs, content] = Layout::vertical([
@@ -127,7 +127,11 @@ fn render_view_tabs(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     };
 
     let tabs = Tabs::new(view_names)
-        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .select(selected)
         .divider(VERTICAL);
 
@@ -164,7 +168,11 @@ fn render_queue(state: &SpeakerState, frame: &mut Frame, area: Rect) {
 
     // Show help text at the bottom if there are tracks in the queue
     if !state.queue.is_empty() {
-        render_help_in_border(frame, area, " SPACE play/pause • n next • p prev • [ ] volume ");
+        render_help_in_border(
+            frame,
+            area,
+            " SPACE play/pause • n next • p prev • [ ] volume ",
+        );
     }
 }
 
@@ -233,21 +241,21 @@ fn render_favorites(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     list_state.select(Some(state.selected_favorite));
 
     let items = state.favorites.iter().map(|fav| {
-        let s = format!(
-            "{} - {}",
-            fav.title,
-            fav.description
-        );
+        let s = format!("{} - {}", fav.title, fav.description);
         ListItem::new(s)
     });
 
     let list = List::new(items)
-        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("⏵ ")
         .block(
             Block::bordered()
                 .title(" Favorite Playlists ")
-                .border_type(Rounded)
+                .border_type(Rounded),
         );
 
     frame.render_stateful_widget(list, area, &mut list_state);
@@ -280,9 +288,9 @@ fn render_help_in_border(frame: &mut Frame, area: Rect, help_text: &str) {
     let help = Paragraph::new(border_line);
     // Position the help text just after the left border corner character
     let help_area = Rect {
-        x: area.x + 1,  // Skip the corner character
+        x: area.x + 1, // Skip the corner character
         y: area.y + area.height.saturating_sub(1),
-        width: area.width.saturating_sub(2),  // Exclude both corner characters
+        width: area.width.saturating_sub(2), // Exclude both corner characters
         height: 1,
     };
     frame.render_widget(help, help_area);
