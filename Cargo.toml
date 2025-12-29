@@ -14,7 +14,7 @@ clap = { version = "4.0", features = ["cargo"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures = "0.3.21"
 human-panic = "2.0.0"
-ratatui = "0.29"
+ratatui = "0.30"
 reqwest = { version = "0.12" }
 serde = "1"
 serde_derive = "1"
