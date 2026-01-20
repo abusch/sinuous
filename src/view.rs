@@ -3,8 +3,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{
-        Alignment::{Center, Right},
-        Constraint, Layout, Rect,
+        Constraint,
+        HorizontalAlignment::{Center, Right},
+        Layout, Rect,
     },
     style::{Color, Modifier, Style},
     symbols::line::VERTICAL,
@@ -162,18 +163,18 @@ fn render_queue(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     let list = List::new(items)
         .highlight_style(Style::default().fg(Color::LightMagenta))
         .highlight_symbol("⏵")
-        .block(Block::bordered().title(" Queue ").border_type(Rounded));
+        .block(
+            Block::bordered()
+                .title_top(" Queue ")
+                .title_bottom(
+                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume ")
+                        .centered()
+                        .style(Style::default().fg(Color::DarkGray)),
+                )
+                .border_type(Rounded),
+        );
 
     frame.render_stateful_widget(list, area, &mut list_state);
-
-    // Show help text at the bottom if there are tracks in the queue
-    if !state.queue.is_empty() {
-        render_help_in_border(
-            frame,
-            area,
-            " SPACE play/pause • n next • p prev • [ ] volume ",
-        );
-    }
 }
 
 fn render_playbar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
@@ -254,46 +255,16 @@ fn render_favorites(state: &SpeakerState, frame: &mut Frame, area: Rect) {
         .highlight_symbol("⏵ ")
         .block(
             Block::bordered()
-                .title(" Favorite Playlists ")
+                .title_top(" Favorite Playlists ")
+                .title_bottom(
+                    Line::from(" ↑↓ Navigate • ENTER to play ")
+                        .centered()
+                        .style(Style::default().fg(Color::DarkGray)),
+                )
                 .border_type(Rounded),
         );
 
     frame.render_stateful_widget(list, area, &mut list_state);
-
-    // Show help text at the bottom if there are favorites
-    if !state.favorites.is_empty() {
-        render_help_in_border(frame, area, " ↑↓ Navigate • ENTER to play ");
-    }
-}
-
-fn render_help_in_border(frame: &mut Frame, area: Rect, help_text: &str) {
-    // Calculate how much space the help text takes
-    let text_width = help_text.len();
-    // Available width is total width minus the 2 border characters (left and right)
-    let available_width = area.width.saturating_sub(2) as usize;
-
-    // Calculate padding for centering
-    let padding = (available_width.saturating_sub(text_width)) / 2;
-
-    // Create the bottom border content (without corner characters - they're drawn by the Block)
-    let left_border = "─".repeat(padding);
-    let right_border = "─".repeat(available_width.saturating_sub(padding + text_width));
-
-    let border_line = Line::from(vec![
-        Span::raw(left_border),
-        Span::styled(help_text, Style::default().fg(Color::DarkGray)),
-        Span::raw(right_border),
-    ]);
-
-    let help = Paragraph::new(border_line);
-    // Position the help text just after the left border corner character
-    let help_area = Rect {
-        x: area.x + 1, // Skip the corner character
-        y: area.y + area.height.saturating_sub(1),
-        width: area.width.saturating_sub(2), // Exclude both corner characters
-        height: 1,
-    };
-    frame.render_widget(help, help_area);
 }
 
 fn format_duration(secs: u32) -> String {
