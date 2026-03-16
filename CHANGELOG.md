@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7](https://github.com/abusch/sinuous/compare/v0.1.6...v0.1.7) - 2026-03-16
+
+### Other
+
+- *(deps)* bump clap from 4.5.54 to 4.6.0
+
 ## [0.1.6](https://github.com/abusch/sinuous/compare/v0.1.5...v0.1.6) - 2026-01-20
 
 ### Added
