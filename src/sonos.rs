@@ -27,9 +27,9 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
-/// How often to subscribe again, which makes the speakers send their whole state. This catches up
-/// with events that were missed, e.g. because a connection dropped.
-const RESYNC_INTERVAL: Duration = Duration::from_secs(60);
+/// How often to retry subscriptions that failed, e.g. because a speaker couldn't be reached. Once
+/// made, subscriptions are restored by the household if a connection drops.
+const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Commands sent while this many are still waiting to run are dropped.
 const COMMAND_QUEUE_SIZE: usize = 16;
 
@@ -240,6 +240,7 @@ struct Service {
     subscribed: HashSet<GroupId>,
     /// Subscriptions in progress, with the group they are for.
     subscriptions: JoinSet<(GroupId, Result<(), sinuous_client::Error>)>,
+    favorites_subscribed: bool,
     /// The version of the favorites in the state.
     favorites_version: Option<String>,
 }
@@ -254,6 +255,7 @@ impl Service {
             state_tx,
             subscribed: HashSet::new(),
             subscriptions: JoinSet::new(),
+            favorites_subscribed: false,
             favorites_version: None,
         }
     }
@@ -266,8 +268,8 @@ impl Service {
         // The favorites get loaded when the initial event arrives.
         self.subscribe_to_favorites().await;
 
-        let mut resync = time::interval_at(time::Instant::now() + RESYNC_INTERVAL, RESYNC_INTERVAL);
-        resync.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut retry = time::interval_at(time::Instant::now() + RETRY_INTERVAL, RETRY_INTERVAL);
+        retry.set_missed_tick_behavior(MissedTickBehavior::Delay);
         debug!("Starting sonos loop");
 
         loop {
@@ -288,7 +290,7 @@ impl Service {
                     self.update_groups();
                 }
                 Some(result) = self.subscriptions.join_next() => self.subscription_done(result),
-                _ = resync.tick() => self.resync().await,
+                _ = retry.tick() => self.retry_subscriptions().await,
                 () = self.state_tx.closed() => {
                     debug!("UI is gone: exiting...");
                     break;
@@ -307,13 +309,6 @@ impl Service {
                 "Playback error: {}",
                 err.reason.unwrap_or(err.error_code)
             )),
-            EventPayload::GroupCoordinatorChanged(_) => {
-                // The subscriptions were on the previous coordinator.
-                if let Some(id) = event.group_id {
-                    self.subscribed.remove(&id);
-                    self.subscribe_to_groups();
-                }
-            }
             payload => {
                 let Some(id) = event.group_id else { return };
                 self.state_tx.send_if_modified(|state| {
@@ -408,7 +403,7 @@ impl Service {
         match result {
             Ok((_, Ok(()))) => {}
             Ok((id, Err(err))) => {
-                // Try again on the next topology change or resync.
+                // Try again later.
                 self.subscribed.remove(&id);
                 self.report_error(format!("Failed to get updates from a group: {err}"));
             }
@@ -416,13 +411,22 @@ impl Service {
         }
     }
 
-    async fn subscribe_to_favorites(&self) {
-        if let Err(err) = self.household.subscribe(&Subscription::Favorites).await {
-            self.report_error(format!("Failed to get updates to favorites: {err}"));
+    async fn subscribe_to_favorites(&mut self) {
+        match self.household.subscribe(&Subscription::Favorites).await {
+            Ok(()) => self.favorites_subscribed = true,
+            Err(err) => self.report_error(format!("Failed to get updates to favorites: {err}")),
         }
     }
 
-    /// Subscribe to everything again. Subscribing makes the speakers send their whole state.
+    async fn retry_subscriptions(&mut self) {
+        self.subscribe_to_groups();
+        if !self.favorites_subscribed {
+            self.subscribe_to_favorites().await;
+        }
+    }
+
+    /// Subscribe to everything again, to catch up with missed events: subscribing makes the
+    /// speakers send their whole state.
     async fn resync(&mut self) {
         debug!("Resyncing");
         self.subscribed.clear();
