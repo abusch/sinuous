@@ -21,7 +21,7 @@ use ratatui::{
 };
 use sinuous_client::{
     GroupId, PlayerId,
-    playback::{PlayModes, PlayModesUpdate},
+    playback::{PlayModes, PlayModesUpdate, PlaybackActions},
 };
 
 use crate::sonos::{
@@ -31,6 +31,8 @@ use crate::sonos::{
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
+/// The style of actions the current source doesn't support.
+const UNSUPPORTED: Style = Style::new().fg(Color::DarkGray);
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 2;
 
@@ -356,6 +358,18 @@ fn handle_favorites_picker_input(
 /// The command for the selected group corresponding to the key pressed, if any.
 fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Option<Command> {
     let (_, group) = ui.current_group(state)?;
+    let required = match input.code {
+        KeyCode::Char(' ') => Some(Action::PlayPause),
+        KeyCode::Char('n') => Some(Action::Next),
+        KeyCode::Char('p') => Some(Action::Previous),
+        KeyCode::Char('s') => Some(Action::Shuffle),
+        KeyCode::Char('r') => Some(Action::Repeat),
+        KeyCode::Char('c') => Some(Action::Crossfade),
+        _ => None,
+    };
+    if required.is_some_and(|action| !supports(group, action)) {
+        return None;
+    }
     let action = match input.code {
         KeyCode::Char(' ') => {
             if group.playback.is_some_and(|p| p.is_playing) {
@@ -374,7 +388,10 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
             shuffle: Some(!group.playback?.play_modes.shuffle),
             ..Default::default()
         }),
-        KeyCode::Char('r') => GroupAction::SetPlayModes(next_repeat(group.playback?.play_modes)),
+        KeyCode::Char('r') => {
+            let playback = group.playback?;
+            GroupAction::SetPlayModes(next_repeat(playback.play_modes, playback.actions))
+        }
         KeyCode::Char('c') => GroupAction::SetPlayModes(PlayModesUpdate {
             crossfade: Some(!group.playback?.play_modes.crossfade),
             ..Default::default()
@@ -388,12 +405,42 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
     })
 }
 
-/// Cycle through no repeat, repeat all and repeat one.
-fn next_repeat(modes: PlayModes) -> PlayModesUpdate {
+/// Something the user can do that the current source may not support.
+#[derive(Debug, Clone, Copy)]
+enum Action {
+    PlayPause,
+    Next,
+    Previous,
+    Shuffle,
+    Repeat,
+    Crossfade,
+}
+
+/// Whether the source `group` is playing from supports `action`. Everything is supported until
+/// the group has said otherwise.
+fn supports(group: &GroupState, action: Action) -> bool {
+    let Some(playback) = group.playback else {
+        return true;
+    };
+    let actions = playback.actions;
+    match action {
+        Action::PlayPause if playback.is_playing => actions.can_pause,
+        Action::PlayPause => actions.can_play,
+        Action::Next => actions.can_skip,
+        Action::Previous => actions.can_skip_back || actions.can_skip_to_previous,
+        Action::Shuffle => actions.can_shuffle,
+        Action::Repeat => actions.can_repeat || actions.can_repeat_one,
+        Action::Crossfade => actions.can_crossfade,
+    }
+}
+
+/// Cycle through no repeat, repeat all and repeat one, skipping the ones `actions` doesn't
+/// support.
+fn next_repeat(modes: PlayModes, actions: PlaybackActions) -> PlayModesUpdate {
     let (repeat, repeat_one) = match (modes.repeat, modes.repeat_one) {
-        (false, false) => (true, false),
-        (true, false) => (false, true),
-        (_, true) => (false, false),
+        (false, false) if actions.can_repeat => (true, false),
+        (false, false) | (true, false) if actions.can_repeat_one => (false, true),
+        _ => (false, false),
     };
     PlayModesUpdate {
         repeat: Some(repeat),
@@ -455,15 +502,10 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
 
 /// The track playing on `group`, how far into it playback is, and the next track.
 fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
-    let help = Line::from(
-        " SPACE play/pause • n/p next/prev • [ ] volume • v mixer • f favorites • g groups • G edit group ",
-    )
-    .centered()
-    .style(Style::default().fg(Color::DarkGray));
     let block = Block::bordered()
         .border_type(Rounded)
         .title_top(" Now playing ")
-        .title_bottom(help);
+        .title_bottom(help_line(group));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -521,9 +563,8 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
         frame,
         progress_area.centered_horizontally(Constraint::Percentage(80)),
     );
-    let play_modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     frame.render_widget(
-        Paragraph::new(play_modes_line(play_modes)).centered(),
+        Paragraph::new(play_modes_line(group)).centered(),
         modes_area,
     );
 
@@ -589,36 +630,76 @@ fn album_line(track: &TrackInfo) -> Line<'_> {
 }
 
 /// The play modes, with the keys toggling them, highlighting the ones that are on.
-fn play_modes_line(modes: PlayModes) -> Line<'static> {
+fn play_modes_line(group: &GroupState) -> Line<'static> {
+    let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     let repeat = if modes.repeat_one {
         "repeat one"
     } else {
         "repeat"
     };
     let modes = [
-        ("s", "shuffle", modes.shuffle),
-        ("r", repeat, modes.repeat || modes.repeat_one),
-        ("c", "crossfade", modes.crossfade),
+        ("s", "shuffle", modes.shuffle, Action::Shuffle),
+        (
+            "r",
+            repeat,
+            modes.repeat || modes.repeat_one,
+            Action::Repeat,
+        ),
+        ("c", "crossfade", modes.crossfade, Action::Crossfade),
     ];
     let mut spans = Vec::new();
-    for (i, (key, label, on)) in modes.into_iter().enumerate() {
+    for (i, (key, label, on, action)) in modes.into_iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("   "));
         }
-        spans.push(Span::styled(
-            format!("{key} "),
-            Style::default().fg(Color::DarkGray),
-        ));
-        let style = if on {
-            Style::default()
-                .fg(Color::LightGreen)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
+        let supported = supports(group, action);
+        let (key_style, label_style) = match (supported, on) {
+            (false, _) => (UNSUPPORTED, UNSUPPORTED),
+            (true, true) => (
+                Style::default().fg(Color::Gray),
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            (true, false) => (
+                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::Gray),
+            ),
         };
-        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(format!("{key} "), key_style));
+        spans.push(Span::styled(label, label_style));
     }
     Line::from(spans)
+}
+
+/// The keys to press for each action, greying out the ones the current source doesn't support.
+fn help_line(group: &GroupState) -> Line<'static> {
+    let entries = [
+        ("SPACE", "play/pause", supports(group, Action::PlayPause)),
+        ("n", "next", supports(group, Action::Next)),
+        ("p", "prev", supports(group, Action::Previous)),
+        ("[ ]", "volume", true),
+        ("v", "mixer", true),
+        ("f", "favorites", true),
+        ("g", "groups", true),
+        ("G", "edit group", true),
+    ];
+    let separator = Style::default().fg(Color::DarkGray);
+    let mut spans = vec![Span::raw(" ")];
+    for (i, (key, label, supported)) in entries.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" • ", separator));
+        }
+        let (key_style, label_style) = if supported {
+            (Style::default(), Style::default().fg(Color::Gray))
+        } else {
+            (UNSUPPORTED, UNSUPPORTED)
+        };
+        spans.push(Span::styled(key, key_style));
+        spans.push(Span::styled(format!(" {label}"), label_style));
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans).centered()
 }
 
 /// The playback status of `group`, and a bar showing how far into the current track it is.
@@ -1027,16 +1108,48 @@ mod tests {
         assert!(ui.volume_mixer.is_none());
     }
 
-    #[test]
-    fn repeat_cycles_through_off_all_and_one() {
+    fn repeat_cycle(actions: PlaybackActions) -> Vec<(bool, bool)> {
         let mut modes = PlayModes::default();
         let mut seen = Vec::new();
         for _ in 0..3 {
-            let update = next_repeat(modes);
+            let update = next_repeat(modes, actions);
             modes.repeat = update.repeat.unwrap();
             modes.repeat_one = update.repeat_one.unwrap();
             seen.push((modes.repeat, modes.repeat_one));
         }
-        assert_eq!(seen, [(true, false), (false, true), (false, false)]);
+        seen
+    }
+
+    #[test]
+    fn repeat_cycles_through_off_all_and_one() {
+        let actions = PlaybackActions {
+            can_repeat: true,
+            can_repeat_one: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            repeat_cycle(actions),
+            [(true, false), (false, true), (false, false)]
+        );
+    }
+
+    #[test]
+    fn repeat_cycle_skips_unsupported_modes() {
+        let actions = PlaybackActions {
+            can_repeat: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            repeat_cycle(actions),
+            [(true, false), (false, false), (true, false)]
+        );
+        let actions = PlaybackActions {
+            can_repeat_one: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            repeat_cycle(actions),
+            [(false, true), (false, false), (false, true)]
+        );
     }
 }

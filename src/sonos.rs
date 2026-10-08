@@ -16,7 +16,8 @@ use sinuous_client::{
     Event, EventPayload, FavoriteId, GroupId, Household, PlayerId, Subscription, Topology,
     favorites::Favorite,
     playback::{
-        LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackState, PlaybackStatus,
+        LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
+        PlaybackStatus,
     },
     playback_metadata::{MetadataStatus, QueueItem, Tag, Track},
 };
@@ -138,6 +139,8 @@ pub struct PlayerInfo {
 pub struct Playback {
     pub is_playing: bool,
     pub play_modes: PlayModes,
+    /// What the current source supports.
+    pub actions: PlaybackActions,
     /// The position in the current track when it was reported.
     position: Duration,
     /// When `position` was reported, if it is moving forward.
@@ -149,6 +152,7 @@ impl Playback {
     fn new(status: &PlaybackStatus, now: Instant) -> Self {
         Self {
             play_modes: status.play_modes,
+            actions: status.available_playback_actions,
             ..Self::from_parts(
                 status.playback_state,
                 Duration::from_millis(status.position_millis.unwrap_or(0)),
@@ -161,6 +165,7 @@ impl Playback {
         Self {
             is_playing: matches!(state, PlaybackState::Playing | PlaybackState::Buffering),
             play_modes: PlayModes::default(),
+            actions: PlaybackActions::default(),
             position,
             advancing_since: (state == PlaybackState::Playing).then_some(now),
         }
