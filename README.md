@@ -21,7 +21,7 @@ need to be on the same network (or visible from your current network).
 - <kbd>v</kbd>: Adjust the volume of the current group or of each of its speakers
 - <kbd>g</kbd>: Switch to another group
 - <kbd>G</kbd>: Add speakers to / remove speakers from the current group
-- <kbd>1</kbd> / <kbd>2</kbd>: Show the queue / favorites
+- <kbd>f</kbd>: Play one of your Sonos favorites
 - <kbd>q</kbd>: Quit
 
 ## To run

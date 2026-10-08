@@ -13,18 +13,16 @@ use ratatui::{
         Layout, Rect,
     },
     style::{Color, Modifier, Style},
-    symbols::line::VERTICAL,
     text::{Line, Span},
     widgets::{
-        Block, BorderType::Rounded, Clear, Gauge, List, ListItem, ListState, Padding, Paragraph,
-        Tabs, Wrap,
+        Block, BorderType::Rounded, Clear, Gauge, HighlightSpacing, List, ListState, Padding,
+        Paragraph, Wrap,
     },
 };
 use sinuous_client::{GroupId, PlayerId};
 
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
-    TrackInfo,
 };
 
 /// How long errors are displayed for.
@@ -32,19 +30,12 @@ const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 2;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ViewMode {
-    #[default]
-    Queue,
-    Favorites,
-}
-
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
 pub struct UiState {
-    view: ViewMode,
     selected_group: Option<GroupId>,
-    selected_favorite: usize,
+    /// The favorite highlighted in the favorites picker, if it is open.
+    favorites_picker: Option<usize>,
     /// The group highlighted in the group picker, if it is open.
     group_picker: Option<usize>,
     group_editor: Option<GroupEditor>,
@@ -73,9 +64,9 @@ impl UiState {
         {
             self.selected_group = state.groups.first().map(|g| g.id.clone());
         }
-        self.selected_favorite = self
-            .selected_favorite
-            .min(state.favorites.len().saturating_sub(1));
+        if let Some(highlighted) = &mut self.favorites_picker {
+            *highlighted = (*highlighted).min(state.favorites.len().saturating_sub(1));
+        }
         if state.groups.is_empty() {
             self.group_picker = None;
         } else if let Some(highlighted) = &mut self.group_picker {
@@ -160,30 +151,16 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, "No speakers found.\n\nPress q to quit.");
     };
-    let [title, playbar, view_tabs, content] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Min(1),
-    ])
-    .areas(frame.area());
+    let [title, now_playing] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    // Title line
     render_title_bar(state, group, frame, title);
-
-    // playbar
-    render_playbar(group, frame, playbar);
-
-    // View tabs
-    render_view_tabs(ui, frame, view_tabs);
-
-    // Main content area (switches based on current view)
-    match ui.view {
-        ViewMode::Queue => render_queue(group, frame, content),
-        ViewMode::Favorites => render_favorites(state, ui, frame, content),
-    }
+    render_now_playing(group, frame, now_playing);
 
     // Popups, on top of everything else
+    if let Some(highlighted) = ui.favorites_picker {
+        render_favorites_picker(state, highlighted, frame);
+    }
     if let Some(highlighted) = ui.volume_mixer {
         render_volume_mixer(state, group, highlighted, frame);
     }
@@ -208,20 +185,11 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
     if let Some(highlighted) = ui.volume_mixer {
         return handle_volume_mixer_input(input, state, ui, highlighted);
     }
+    if let Some(highlighted) = ui.favorites_picker {
+        return handle_favorites_picker_input(input, state, ui, highlighted);
+    }
     match input.code {
-        // View switching
-        KeyCode::Char('1') => ui.view = ViewMode::Queue,
-        KeyCode::Char('2') => ui.view = ViewMode::Favorites,
-
-        // Favorites navigation (only when in Favorites view)
-        KeyCode::Up | KeyCode::Char('k') if ui.view == ViewMode::Favorites => {
-            ui.selected_favorite = ui.selected_favorite.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::Char('j') if ui.view == ViewMode::Favorites => {
-            if ui.selected_favorite + 1 < state.favorites.len() {
-                ui.selected_favorite += 1;
-            }
-        }
+        KeyCode::Char('f') => ui.favorites_picker = Some(0),
 
         // Group switching
         KeyCode::Char('g') => ui.open_group_picker(state),
@@ -349,17 +317,42 @@ fn handle_volume_mixer_input(
     }
 }
 
+/// Update `ui` according to the key pressed while the favorites picker is open, with the favorite
+/// at index `highlighted` highlighted, and return the command playing the favorite, if any.
+fn handle_favorites_picker_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    highlighted: usize,
+) -> Option<Command> {
+    match input.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            ui.favorites_picker = Some(highlighted.saturating_sub(1));
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if highlighted + 1 < state.favorites.len() {
+                ui.favorites_picker = Some(highlighted + 1);
+            }
+        }
+        KeyCode::Enter => {
+            ui.favorites_picker = None;
+            let favorite = state.favorites.get(highlighted)?;
+            let (_, group) = ui.current_group(state)?;
+            return Some(Command::Group {
+                group: group.id.clone(),
+                action: GroupAction::LoadFavorite(favorite.id.clone()),
+            });
+        }
+        KeyCode::Esc | KeyCode::Char('f') => ui.favorites_picker = None,
+        _ => {}
+    }
+    None
+}
+
 /// The command for the selected group corresponding to the key pressed, if any.
 fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Option<Command> {
     let (_, group) = ui.current_group(state)?;
     let action = match input.code {
-        // Play favorite
-        KeyCode::Enter if ui.view == ViewMode::Favorites => {
-            let favorite = state.favorites.get(ui.selected_favorite)?;
-            GroupAction::LoadFavorite(favorite.id.clone())
-        }
-
-        // Playback controls (work in any view)
         KeyCode::Char(' ') => {
             if group.playback.is_some_and(|p| p.is_playing) {
                 GroupAction::Pause
@@ -431,63 +424,87 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
     frame.render_widget(vol, volume_area);
 }
 
-fn render_view_tabs(ui: &UiState, frame: &mut Frame, area: Rect) {
-    let view_names = vec!["1 Queue", "2 Favorites"];
-    let selected = match ui.view {
-        ViewMode::Queue => 0,
-        ViewMode::Favorites => 1,
+/// The track playing on `group`, how far into it playback is, and the next track.
+fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
+    let help = Line::from(
+        " SPACE play/pause • n/p next/prev • [ ] volume • v mixer • f favorites • g groups • G edit group ",
+    )
+    .centered()
+    .style(Style::default().fg(Color::DarkGray));
+    let block = Block::bordered()
+        .border_type(Rounded)
+        .title_top(" Now playing ")
+        .title_bottom(help);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let [_, info_area, _, progress_area, _, next_area, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+    ])
+    .areas(inner);
+
+    // Track information
+    let info = match &group.now_playing {
+        Some(track) => vec![
+            Line::styled(
+                track.title.as_deref().unwrap_or("Unknown title"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                track.artist.as_deref().unwrap_or("Unknown artist"),
+                Style::default().fg(Color::Cyan),
+            ),
+            Line::styled(
+                track.album.as_deref().unwrap_or("Unknown album"),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ],
+        None => vec![
+            Line::default(),
+            Line::styled("Nothing playing", Style::default().fg(Color::DarkGray)),
+        ],
     };
+    frame.render_widget(Paragraph::new(info).centered(), info_area);
 
-    let tabs = Tabs::new(view_names)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .select(selected)
-        .divider(VERTICAL);
+    render_progress(
+        group,
+        frame,
+        progress_area.centered_horizontally(Constraint::Percentage(80)),
+    );
 
-    frame.render_widget(tabs, area);
+    // Next track
+    if let Some(next) = &group.next_track {
+        let dim = Style::default().fg(Color::DarkGray);
+        let next = Line::from(vec![
+            Span::styled("Next: ", dim),
+            Span::raw(next.title.as_deref().unwrap_or("Unknown title")),
+            Span::styled(" by ", dim),
+            Span::styled(
+                next.artist.as_deref().unwrap_or("Unknown artist"),
+                Style::default().fg(Color::Cyan),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(next).centered(), next_area);
+    }
 }
 
-fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
-    let now_playing = group.now_playing.as_ref();
-    let next_track = group.next_track.as_ref();
-
-    // Only the current and next tracks are known: select the current one (if any)
-    let mut list_state = ListState::default();
-    list_state.select(now_playing.map(|_| 0));
-
-    let items = now_playing.into_iter().chain(next_track).map(|t| {
-        let s = format!(
-            "{} ({})",
-            format_track(t),
-            format_duration(t.duration_secs.unwrap_or(0))
-        );
-        ListItem::new(s)
-    });
-    let list = List::new(items)
-        .highlight_style(Style::default().fg(Color::LightMagenta))
-        .highlight_symbol("⏵")
-        .block(
-            Block::bordered()
-                .title_top(" Queue ")
-                .title_bottom(
-                    Line::from(" SPACE play/pause • n/p next/prev • [ ] volume • v mixer • g groups • G edit group ")
-                        .centered()
-                        .style(Style::default().fg(Color::DarkGray)),
-                )
-                .border_type(Rounded),
-        );
-
-    frame.render_stateful_widget(list, area, &mut list_state);
-}
-
-fn render_playbar(group: &GroupState, frame: &mut Frame, area: Rect) {
+/// The playback status of `group`, and a bar showing how far into the current track it is.
+fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
     let playback = group.playback;
-    let (np, label, ratio) = if let Some(track) = &group.now_playing {
-        let duration = track.duration_secs.unwrap_or(0);
-        let elapsed = playback.map_or(0, |p| {
+    let duration = group
+        .now_playing
+        .as_ref()
+        .map_or(0, |track| track.duration_secs.unwrap_or(0));
+    let elapsed = match (&group.now_playing, playback) {
+        (Some(_), Some(p)) => {
             let elapsed = u32::try_from(p.position(Instant::now()).as_secs()).unwrap_or(u32::MAX);
             // The position is worked out locally, and can run past the end of the track until the
             // speakers report the next one.
@@ -496,88 +513,74 @@ fn render_playbar(group: &GroupState, frame: &mut Frame, area: Rect) {
             } else {
                 elapsed
             }
-        });
-        let percent = if duration != 0 {
-            f64::clamp(f64::from(elapsed) / f64::from(duration), 0.0, 1.0)
-        } else {
-            0.0
-        };
-        let label = format!(
-            "{} / {}",
-            format_duration(elapsed),
-            format_duration(duration)
-        );
-        let title = format!(" {} ", format_track(track));
-        (title, label, percent)
+        }
+        _ => 0,
+    };
+    let ratio = if duration != 0 {
+        f64::clamp(f64::from(elapsed) / f64::from(duration), 0.0, 1.0)
     } else {
-        (
-            " Nothing currently playing ".to_owned(),
-            "0:00 / 0:00".to_owned(),
-            0.0,
-        )
+        0.0
     };
 
-    // Border around the whole playbar section
-    let block = Block::bordered().border_type(Rounded).title(np);
-    // The inner area is where the gauge and control buttons will be rendered
-    let playbar_area = block.inner(area);
-
-    // split the inner area into 2 columns for the buttons and the gauge
     let [symbol_area, bar_area] =
-        Layout::horizontal([Constraint::Length(3), Constraint::Min(1)]).areas(playbar_area);
+        Layout::horizontal([Constraint::Length(3), Constraint::Min(1)]).areas(area);
 
     let is_playing = playback.is_some_and(|p| p.is_playing);
     let media_symbol = if is_playing { "⏵" } else { "⏸" };
     let symbol = Paragraph::new(media_symbol).alignment(Center);
 
-    let playbar = Gauge::default()
+    let bar = Gauge::default()
         .use_unicode(true)
         .gauge_style(
             Style::default()
                 .fg(Color::LightGreen)
-                .bg(Color::Black)
+                .bg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
         )
-        .label(label)
+        .label(format!(
+            "{} / {}",
+            format_duration(elapsed),
+            format_duration(duration)
+        ))
         .ratio(ratio);
 
-    // render all the widgets
-    frame.render_widget(block, area);
-    frame.render_widget(symbol, symbol_area);
-    frame.render_widget(playbar, bar_area);
+    frame.render_widget(
+        symbol,
+        symbol_area.centered_vertically(Constraint::Length(1)),
+    );
+    frame.render_widget(bar, bar_area);
 }
 
-fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, area: Rect) {
-    let mut list_state = ListState::default();
-    list_state.select(Some(ui.selected_favorite));
+/// A popup listing the favorites, with the one at `highlighted` highlighted.
+fn render_favorites_picker(state: &HouseholdState, highlighted: usize, frame: &mut Frame) {
+    let lines: Vec<_> = state
+        .favorites
+        .iter()
+        .map(|fav| {
+            let mut spans = vec![Span::raw(fav.name.as_str())];
+            if let Some(description) = &fav.description {
+                spans.push(Span::styled(
+                    format!("  {description}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let (lines, highlighted) = if lines.is_empty() {
+        let none = Line::styled("No favorites", Style::default().fg(Color::DarkGray));
+        (vec![none], None)
+    } else {
+        (lines, Some(highlighted))
+    };
 
-    let items = state.favorites.iter().map(|fav| {
-        let s = match &fav.description {
-            Some(description) => format!("{} - {}", fav.name, description),
-            None => fav.name.clone(),
-        };
-        ListItem::new(s)
-    });
-
-    let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("⏵ ")
-        .block(
-            Block::bordered()
-                .title_top(" Favorites ")
-                .title_bottom(
-                    Line::from(" ↑↓ Navigate • ENTER to play • v mixer • g groups • G edit group ")
-                        .centered()
-                        .style(Style::default().fg(Color::DarkGray)),
-                )
-                .border_type(Rounded),
-        );
-
-    frame.render_stateful_widget(list, area, &mut list_state);
+    render_popup(
+        frame,
+        " Favorites ",
+        lines,
+        highlighted,
+        " ↑↓ Navigate • ENTER play • ESC close ",
+    );
 }
 
 /// A popup listing the groups, with the selected group (at `selected`) in green and the one at
@@ -615,7 +618,7 @@ fn render_group_picker(
         frame,
         " Groups ",
         lines,
-        highlighted,
+        Some(highlighted),
         " ↑↓ Navigate • ENTER select • ESC close ",
     );
 }
@@ -649,7 +652,7 @@ fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut
         frame,
         " Group speakers ",
         lines,
-        editor.highlighted,
+        Some(editor.highlighted),
         " ↑↓ Navigate • SPACE toggle • ENTER apply • ESC cancel ",
     );
 }
@@ -700,14 +703,20 @@ fn render_volume_mixer(
         frame,
         " Volume ",
         lines,
-        highlighted,
+        Some(highlighted),
         " ↑↓ Navigate • ←→ adjust • ESC close ",
     );
 }
 
 /// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
-/// highlighted.
-fn render_popup(frame: &mut Frame, title: &str, lines: Vec<Line>, highlighted: usize, help: &str) {
+/// highlighted, if any.
+fn render_popup(
+    frame: &mut Frame,
+    title: &str,
+    lines: Vec<Line>,
+    highlighted: Option<usize>,
+    help: &str,
+) {
     const HIGHLIGHT_SYMBOL: &str = "⏵ ";
     const PADDING: Padding = Padding::symmetric(2, 1);
     let help = Line::from(help)
@@ -726,10 +735,11 @@ fn render_popup(frame: &mut Frame, title: &str, lines: Vec<Line>, highlighted: u
         .centered(Constraint::Length(width), Constraint::Length(height));
 
     let mut list_state = ListState::default();
-    list_state.select(Some(highlighted));
+    list_state.select(highlighted);
     let list = List::new(lines)
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol(HIGHLIGHT_SYMBOL)
+        .highlight_spacing(HighlightSpacing::Always)
         .block(
             Block::bordered()
                 .border_type(Rounded)
@@ -744,15 +754,6 @@ fn render_popup(frame: &mut Frame, title: &str, lines: Vec<Line>, highlighted: u
 
 fn is_shown(error: &ErrorMessage) -> bool {
     error.at.elapsed() < ERROR_DISPLAY_TIME
-}
-
-fn format_track(track: &TrackInfo) -> String {
-    format!(
-        "{} - {} - {}",
-        track.artist.as_deref().unwrap_or("Unknown"),
-        track.album.as_deref().unwrap_or("Unknown"),
-        track.title.as_deref().unwrap_or("Unknown"),
-    )
 }
 
 fn format_duration(secs: u32) -> String {
