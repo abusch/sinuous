@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7](https://github.com/abusch/sinuous/compare/v0.1.6...v0.1.7) - 2026-10-08
+
+### Added
+
+- Use events instead of polling for playback updates
+- Connect to the first speaker that answers discovery
+- Replace sonor with sinuous-client
+
+### Other
+
+- Rely on sinuous-client to restore subscriptions
+- Upgrade sinuous-client to 0.2.0
+- Move UI state out of the Sonos service
+- Use sinuous-client from crates.io
+- Remove unused dependencies
+- *(deps)* bump clap from 4.5.54 to 4.6.0
+
 ## [0.1.6](https://github.com/abusch/sinuous/compare/v0.1.5...v0.1.6) - 2026-01-20
 
 ### Added
