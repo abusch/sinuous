@@ -1,11 +1,14 @@
-use std::{net::Ipv4Addr, str::FromStr};
+use std::{net::Ipv4Addr, str::FromStr, time::Duration};
 
 use anyhow::{Result, anyhow};
 use clap::ArgMatches;
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
-use tokio::select;
+use tokio::{
+    select,
+    time::{self, MissedTickBehavior},
+};
 use tracing::{debug, warn};
 
 use crate::{
@@ -13,6 +16,9 @@ use crate::{
     sonos::{self, ProvidedDevices},
     view::{self, UiState},
 };
+
+/// How often to redraw while what is displayed changes over time, e.g. the playback position.
+const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct App {
     devices: ProvidedDevices,
@@ -47,13 +53,15 @@ impl App {
 
         let mut ui = UiState::default();
         let mut events = EventStream::new();
+        let mut redraw = time::interval(REDRAW_INTERVAL);
+        redraw.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         debug!("Starting main loop...");
         loop {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
-            sonos.focus(ui.selected_group());
             terminal.draw(|f| view::render_ui(f, &state, &ui))?;
+            let animated = view::is_animated(&state, &ui);
 
             select! {
                 event = events.try_next() => {
@@ -67,6 +75,7 @@ impl App {
                         }
                     }
                 }
+                _ = redraw.tick(), if animated => {}
                 changed = state_rx.changed(), if service_running => {
                     if changed.is_err() {
                         // Keep displaying the last state, e.g. why we failed to connect.

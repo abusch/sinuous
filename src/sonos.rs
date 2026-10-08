@@ -1,8 +1,9 @@
 //! The background service talking to the Sonos speakers.
 //!
 //! The service publishes a [`HouseholdState`] snapshot that the UI renders, and runs the
-//! [`Command`]s the UI sends. Commands run in their own task, so that a slow speaker never holds up
-//! state updates.
+//! [`Command`]s the UI sends. The state is kept up to date from the events the speakers send,
+//! rather than by polling them. Commands run in their own task, so that a slow speaker never holds
+//! up state updates.
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -10,22 +11,25 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use futures::StreamExt;
+use futures::{StreamExt, future};
 use sinuous_client::{
-    FavoriteId, GroupId, Household, Topology,
+    Event, EventPayload, FavoriteId, GroupId, Household, Subscription, Topology,
     favorites::Favorite,
-    playback::{LoadAction, LoadOptions, PlaybackState},
+    playback::{LoadAction, LoadOptions, PlaybackState, PlaybackStatus},
     playback_metadata::{QueueItem, Track},
 };
 use tokio::{
     select,
-    sync::{mpsc, watch},
-    time::MissedTickBehavior,
+    sync::{broadcast, mpsc, watch},
+    task::{JoinError, JoinSet},
+    time::{self, MissedTickBehavior},
 };
 use tracing::{debug, error, info, warn};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
-const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+/// How often to subscribe again, which makes the speakers send their whole state. This catches up
+/// with events that were missed, e.g. because a connection dropped.
+const RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 /// Commands sent while this many are still waiting to run are dropped.
 const COMMAND_QUEUE_SIZE: usize = 16;
 
@@ -69,21 +73,73 @@ impl ErrorMessage {
     }
 }
 
+/// A group, and what it has told us about itself. Fields are `None` until the group has reported
+/// them.
 #[derive(Debug, Clone)]
 pub struct GroupState {
     pub id: GroupId,
     pub name: String,
-    /// `None` until fetched. Only the focused group is kept up to date.
     pub playback: Option<Playback>,
+    pub volume: Option<u8>,
+    pub now_playing: Option<TrackInfo>,
+    pub next_track: Option<TrackInfo>,
 }
 
-#[derive(Debug, Clone)]
+impl GroupState {
+    fn new(id: GroupId, name: String) -> Self {
+        Self {
+            id,
+            name,
+            playback: None,
+            volume: None,
+            now_playing: None,
+            next_track: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Playback {
     pub is_playing: bool,
-    pub volume: u8,
-    pub now_playing: Option<TrackInfo>,
-    pub elapsed_secs: u32,
-    pub next_track: Option<TrackInfo>,
+    /// The position in the current track when it was reported.
+    position: Duration,
+    /// When `position` was reported, if it is moving forward.
+    advancing_since: Option<Instant>,
+}
+
+impl Playback {
+    /// The playback as reported at `now`.
+    fn new(status: &PlaybackStatus, now: Instant) -> Self {
+        Self::from_parts(
+            status.playback_state,
+            Duration::from_millis(status.position_millis.unwrap_or(0)),
+            now,
+        )
+    }
+
+    fn from_parts(state: PlaybackState, position: Duration, now: Instant) -> Self {
+        Self {
+            is_playing: matches!(state, PlaybackState::Playing | PlaybackState::Buffering),
+            position,
+            advancing_since: (state == PlaybackState::Playing).then_some(now),
+        }
+    }
+
+    /// The position in the current track at `now`.
+    ///
+    /// Speakers only report the position when something changes (e.g. the track or the playback
+    /// state), so it is worked out from the last one they reported.
+    pub fn position(&self, now: Instant) -> Duration {
+        let advanced = self
+            .advancing_since
+            .map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        self.position + advanced
+    }
+
+    /// Whether [`Playback::position`] changes over time.
+    pub fn is_advancing(&self) -> bool {
+        self.advancing_since.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +186,6 @@ pub enum GroupAction {
 pub struct SonosHandle {
     state_rx: watch::Receiver<HouseholdState>,
     cmd_tx: mpsc::Sender<Command>,
-    focus_tx: watch::Sender<Option<GroupId>>,
 }
 
 impl SonosHandle {
@@ -149,25 +204,12 @@ impl SonosHandle {
             warn!(%err, "Dropping command");
         }
     }
-
-    /// Set the group the UI is showing, which is the one the service keeps up to date.
-    pub fn focus(&self, group: Option<&GroupId>) {
-        self.focus_tx.send_if_modified(|focused| {
-            if focused.as_ref() == group {
-                false
-            } else {
-                *focused = group.cloned();
-                true
-            }
-        });
-    }
 }
 
 /// Start the service in the background.
 pub fn spawn(devices: ProvidedDevices) -> SonosHandle {
     let (state_tx, state_rx) = watch::channel(HouseholdState::default());
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_SIZE);
-    let (focus_tx, focus_rx) = watch::channel(None);
 
     tokio::spawn(async move {
         let household = match connect_household(devices).await {
@@ -181,74 +223,129 @@ pub fn spawn(devices: ProvidedDevices) -> SonosHandle {
             }
         };
 
-        let (done_tx, done_rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_commands(household.clone(), cmd_rx, done_tx));
-        Service {
-            household,
-            state_tx,
-            focus_rx,
-            done_rx,
-        }
-        .run()
-        .await;
+        tokio::spawn(run_commands(household.clone(), cmd_rx, state_tx.clone()));
+        Service::new(household, state_tx).run().await;
     });
 
-    SonosHandle {
-        state_rx,
-        cmd_tx,
-        focus_tx,
-    }
+    SonosHandle { state_rx, cmd_tx }
 }
 
 /// Keeps the [`HouseholdState`] up to date.
 struct Service {
     household: Household,
     state_tx: watch::Sender<HouseholdState>,
-    focus_rx: watch::Receiver<Option<GroupId>>,
-    /// Outcomes of the commands run by [`run_commands`].
-    done_rx: mpsc::UnboundedReceiver<Result<(), String>>,
+    events: broadcast::Receiver<Event>,
+    topology_rx: watch::Receiver<Topology>,
+    /// The groups we have subscribed to, or are subscribing to.
+    subscribed: HashSet<GroupId>,
+    /// Subscriptions in progress, with the group they are for.
+    subscriptions: JoinSet<(GroupId, Result<(), sinuous_client::Error>)>,
+    /// The version of the favorites in the state.
+    favorites_version: Option<String>,
 }
 
 impl Service {
+    fn new(household: Household, state_tx: watch::Sender<HouseholdState>) -> Self {
+        Self {
+            // Before subscribing to anything, so that we get the initial events.
+            events: household.events(),
+            topology_rx: household.topology_updates(),
+            household,
+            state_tx,
+            subscribed: HashSet::new(),
+            subscriptions: JoinSet::new(),
+            favorites_version: None,
+        }
+    }
+
     async fn run(mut self) {
         self.update_groups();
         self.state_tx.send_modify(|state| {
             state.status = ConnectionStatus::Connected;
         });
-        self.load_favorites().await;
+        // The favorites get loaded when the initial event arrives.
+        self.subscribe_to_favorites().await;
 
-        let mut ticker = tokio::time::interval(REFRESH_INTERVAL);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut resync = time::interval_at(time::Instant::now() + RESYNC_INTERVAL, RESYNC_INTERVAL);
+        resync.set_missed_tick_behavior(MissedTickBehavior::Delay);
         debug!("Starting sonos loop");
 
         loop {
             select! {
-                _ = ticker.tick() => {}
-                changed = self.focus_rx.changed() => {
+                event = self.events.recv() => match event {
+                    Ok(event) => self.handle_event(event).await,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Missed {n} events");
+                        self.resync().await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                changed = self.topology_rx.changed() => {
                     if changed.is_err() {
-                        debug!("UI is gone: exiting...");
                         break;
                     }
+                    // Groups can be created and modified at any time, e.g. from the Sonos app.
+                    self.update_groups();
                 }
-                done = self.done_rx.recv() => {
-                    let Some(result) = done else { break };
-                    self.report(result);
-                    // Refresh once for all the commands that completed.
-                    while let Ok(result) = self.done_rx.try_recv() {
-                        self.report(result);
-                    }
+                Some(result) = self.subscriptions.join_next() => self.subscription_done(result),
+                _ = resync.tick() => self.resync().await,
+                () = self.state_tx.closed() => {
+                    debug!("UI is gone: exiting...");
+                    break;
                 }
             }
-            self.refresh().await;
         }
         self.household.close().await;
     }
 
-    async fn load_favorites(&mut self) {
+    async fn handle_event(&mut self, event: Event) {
+        match event.payload {
+            EventPayload::VersionChanged(changed) if event.namespace == "favorites" => {
+                self.load_favorites(changed.version).await;
+            }
+            EventPayload::PlaybackError(err) => self.report_error(format!(
+                "Playback error: {}",
+                err.reason.unwrap_or(err.error_code)
+            )),
+            EventPayload::GroupCoordinatorChanged(_) => {
+                // The subscriptions were on the previous coordinator.
+                if let Some(id) = event.group_id {
+                    self.subscribed.remove(&id);
+                    self.subscribe_to_groups();
+                }
+            }
+            payload => {
+                let Some(id) = event.group_id else { return };
+                self.state_tx.send_if_modified(|state| {
+                    let Some(group) = state.groups.iter_mut().find(|g| g.id == id) else {
+                        return false;
+                    };
+                    match payload {
+                        EventPayload::PlaybackStatus(status) => {
+                            group.playback = Some(Playback::new(&status, Instant::now()));
+                        }
+                        EventPayload::MetadataStatus(metadata) => {
+                            group.now_playing = metadata.current_item.as_ref().and_then(track_info);
+                            group.next_track = metadata.next_item.as_ref().and_then(track_info);
+                        }
+                        EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
+                        _ => return false,
+                    }
+                    true
+                });
+            }
+        }
+    }
+
+    async fn load_favorites(&mut self, version: String) {
+        if self.favorites_version.as_ref() == Some(&version) {
+            return;
+        }
         debug!("Fetching favorites...");
         match self.household.connection().get_favorites().await {
             Ok(favorites) => {
                 info!("Found {} favorites", favorites.items.len());
+                self.favorites_version = Some(version);
                 self.state_tx.send_modify(|state| {
                     state.favorites = favorites.items.into();
                 });
@@ -257,86 +354,102 @@ impl Service {
         }
     }
 
-    async fn refresh(&mut self) {
-        // Groups can be created and modified at any time, e.g. from the Sonos app.
-        self.update_groups();
-
-        let focused = self.focus_rx.borrow_and_update().clone();
-        let Some(id) = focused else { return };
-        if !self.state_tx.borrow().groups.iter().any(|g| g.id == id) {
-            // The UI will pick another group.
-            return;
-        }
-        match fetch_playback(&self.household, &id).await {
-            Ok(playback) => self.state_tx.send_modify(|state| {
-                if let Some(group) = state.groups.iter_mut().find(|g| g.id == id) {
-                    group.playback = Some(playback);
-                }
-            }),
-            Err(err) => self.report_error(format!("Failed to refresh state: {err:#}")),
-        }
-    }
-
     /// Update the groups from the household's topology, keeping what we know about them.
-    fn update_groups(&self) {
-        let groups = group_states(&self.household.topology());
+    fn update_groups(&mut self) {
+        let groups = group_states(&self.topology_rx.borrow_and_update());
+        self.subscribed
+            .retain(|id| groups.iter().any(|group| &group.id == id));
         self.state_tx.send_modify(|state| {
-            let mut old_groups = std::mem::replace(&mut state.groups, groups);
-            for group in &mut state.groups {
-                if let Some(old) = old_groups.iter_mut().find(|old| old.id == group.id) {
-                    group.playback = old.playback.take();
-                }
-            }
+            let old_groups = std::mem::replace(&mut state.groups, groups);
+            keep_group_states(&mut state.groups, &old_groups);
         });
+        self.subscribe_to_groups();
     }
 
-    fn report(&self, result: Result<(), String>) {
-        if let Err(message) = result {
-            self.report_error(message);
+    /// Subscribe to the events of the groups we haven't subscribed to yet.
+    ///
+    /// The subscriptions run in the background: they may need to connect to other speakers.
+    fn subscribe_to_groups(&mut self) {
+        let ids: Vec<_> = self
+            .state_tx
+            .borrow()
+            .groups
+            .iter()
+            .filter(|group| !self.subscribed.contains(&group.id))
+            .map(|group| group.id.clone())
+            .collect();
+        for id in ids {
+            debug!("Subscribing to {id}");
+            self.subscribed.insert(id.clone());
+            let household = self.household.clone();
+            self.subscriptions.spawn(async move {
+                let subscriptions = [
+                    Subscription::Playback(id.clone()),
+                    Subscription::PlaybackMetadata(id.clone()),
+                    Subscription::GroupVolume(id.clone()),
+                ];
+                let result =
+                    future::try_join_all(subscriptions.iter().map(|s| household.subscribe(s)))
+                        .await
+                        .map(|_| ());
+                (id, result)
+            });
         }
+    }
+
+    fn subscription_done(
+        &mut self,
+        result: Result<(GroupId, Result<(), sinuous_client::Error>), JoinError>,
+    ) {
+        match result {
+            Ok((_, Ok(()))) => {}
+            Ok((id, Err(err))) => {
+                // Try again on the next topology change or resync.
+                self.subscribed.remove(&id);
+                self.report_error(format!("Failed to get updates from a group: {err}"));
+            }
+            Err(err) => error!("Subscription task failed: {err}"),
+        }
+    }
+
+    async fn subscribe_to_favorites(&self) {
+        if let Err(err) = self.household.subscribe(&Subscription::Favorites).await {
+            self.report_error(format!("Failed to get updates to favorites: {err}"));
+        }
+    }
+
+    /// Subscribe to everything again. Subscribing makes the speakers send their whole state.
+    async fn resync(&mut self) {
+        debug!("Resyncing");
+        self.subscribed.clear();
+        self.subscribe_to_groups();
+        self.subscribe_to_favorites().await;
     }
 
     fn report_error(&self, message: String) {
-        warn!("{message}");
-        self.state_tx.send_modify(|state| {
-            state.last_error = Some(ErrorMessage::new(message));
-        });
+        report_error(&self.state_tx, message);
     }
 }
 
-async fn fetch_playback(household: &Household, id: &GroupId) -> Result<Playback> {
-    let group = household.group(id).await?;
-    let (status, volume, metadata) = tokio::try_join!(
-        group.get_playback_status(),
-        group.get_volume(),
-        group.get_metadata_status(),
-    )?;
-
-    Ok(Playback {
-        is_playing: matches!(
-            status.playback_state,
-            PlaybackState::Playing | PlaybackState::Buffering
-        ),
-        volume: volume.volume,
-        elapsed_secs: status.position_millis.map_or(0, millis_to_secs),
-        now_playing: metadata.current_item.and_then(|item| track_info(&item)),
-        next_track: metadata.next_item.and_then(|item| track_info(&item)),
-    })
+fn report_error(state_tx: &watch::Sender<HouseholdState>, message: String) {
+    warn!("{message}");
+    state_tx.send_modify(|state| {
+        state.last_error = Some(ErrorMessage::new(message));
+    });
 }
 
-/// Run commands one at a time, in the order they were sent, and report their outcome.
+/// Run commands one at a time, in the order they were sent, and report failures.
+///
+/// There is no need to report what the commands change: the speakers send events about it.
 async fn run_commands(
     household: Household,
     mut cmd_rx: mpsc::Receiver<Command>,
-    done_tx: mpsc::UnboundedSender<Result<(), String>>,
+    state_tx: watch::Sender<HouseholdState>,
 ) {
     while let Some(command) = cmd_rx.recv().await {
         debug!(?command, "Running command");
-        let result = run_command(&household, &command)
-            .await
-            .map_err(|err| format!("{err:#}"));
-        if done_tx.send(result).is_err() {
-            break;
+        if let Err(err) = run_command(&household, &command).await {
+            report_error(&state_tx, format!("{err:#}"));
         }
     }
 }
@@ -454,15 +567,24 @@ fn group_states(topology: &Topology) -> Vec<GroupState> {
             } else {
                 names.join(" + ")
             };
-            GroupState {
-                id: group.id.clone(),
-                name,
-                playback: None,
-            }
+            GroupState::new(group.id.clone(), name)
         })
         .collect();
     groups.sort_by(|a, b| a.name.cmp(&b.name));
     groups
+}
+
+/// Copy what we know about the groups in `old_groups` to the same groups in `groups`.
+fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
+    for group in groups {
+        if let Some(old) = old_groups.iter().find(|old| old.id == group.id) {
+            let name = std::mem::take(&mut group.name);
+            *group = GroupState {
+                name,
+                ..old.clone()
+            };
+        }
+    }
 }
 
 /// Players report items with an empty track when there is nothing to show, e.g. for a suspended
@@ -474,4 +596,61 @@ fn track_info(item: &QueueItem) -> Option<TrackInfo> {
 
 fn millis_to_secs(millis: u64) -> u32 {
     u32::try_from(millis / 1000).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn position_advances_while_playing() {
+        let start = Instant::now();
+        let playback = Playback::from_parts(PlaybackState::Playing, Duration::from_secs(10), start);
+        assert!(playback.is_playing);
+        assert!(playback.is_advancing());
+        assert_eq!(playback.position(start), Duration::from_secs(10));
+        assert_eq!(
+            playback.position(start + Duration::from_secs(5)),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[test]
+    fn position_stays_put_unless_playing() {
+        let start = Instant::now();
+        let later = start + Duration::from_secs(5);
+        for (state, is_playing) in [
+            (PlaybackState::Paused, false),
+            (PlaybackState::Idle, false),
+            (PlaybackState::Buffering, true),
+        ] {
+            let playback = Playback::from_parts(state, Duration::from_secs(10), start);
+            assert_eq!(playback.is_playing, is_playing, "{state:?}");
+            assert!(!playback.is_advancing(), "{state:?}");
+            assert_eq!(
+                playback.position(later),
+                Duration::from_secs(10),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn group_states_are_kept_across_topology_changes() {
+        let mut kitchen = GroupState::new("kitchen".into(), "Kitchen".to_owned());
+        kitchen.volume = Some(20);
+        let office = GroupState::new("office".into(), "Office".to_owned());
+        let old_groups = [kitchen, office];
+
+        let mut groups = [
+            GroupState::new("kitchen".into(), "Kitchen + Office".to_owned()),
+            GroupState::new("bedroom".into(), "Bedroom".to_owned()),
+        ];
+        keep_group_states(&mut groups, &old_groups);
+
+        assert_eq!(groups[0].name, "Kitchen + Office");
+        assert_eq!(groups[0].volume, Some(20));
+        assert_eq!(groups[1].name, "Bedroom");
+        assert_eq!(groups[1].volume, None);
+    }
 }

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -19,7 +19,7 @@ use ratatui::{
 use sinuous_client::GroupId;
 
 use crate::sonos::{
-    Command, ConnectionStatus, GroupAction, GroupState, HouseholdState, Playback, TrackInfo,
+    Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, TrackInfo,
 };
 
 /// How long errors are displayed for.
@@ -55,10 +55,6 @@ impl UiState {
             .min(state.favorites.len().saturating_sub(1));
     }
 
-    pub fn selected_group(&self) -> Option<&GroupId> {
-        self.selected_group.as_ref()
-    }
-
     /// The selected group and its index.
     fn current_group<'a>(&self, state: &'a HouseholdState) -> Option<(usize, &'a GroupState)> {
         let id = self.selected_group.as_ref()?;
@@ -80,6 +76,17 @@ impl UiState {
     }
 }
 
+/// Whether what is displayed changes over time, and so needs redrawing even when the state doesn't
+/// change.
+pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
+    let showing_error = state.last_error.as_ref().is_some_and(is_shown);
+    let advancing = ui
+        .current_group(state)
+        .and_then(|(_, group)| group.playback)
+        .is_some_and(|playback| playback.is_advancing());
+    showing_error || advancing
+}
+
 pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     match &state.status {
         ConnectionStatus::Connecting => {
@@ -96,8 +103,6 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, "No speakers found.\n\nPress q to quit.");
     };
-    let playback = group.playback.as_ref();
-
     let [title, tabs, playbar, view_tabs, content] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(3),
@@ -114,14 +119,14 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     render_tabs(state, group_index, frame, tabs);
 
     // playbar
-    render_playbar(playback, frame, playbar);
+    render_playbar(group, frame, playbar);
 
     // View tabs
     render_view_tabs(ui, frame, view_tabs);
 
     // Main content area (switches based on current view)
     match ui.view {
-        ViewMode::Queue => render_queue(playback, frame, content),
+        ViewMode::Queue => render_queue(group, frame, content),
         ViewMode::Favorites => render_favorites(state, ui, frame, content),
     }
 }
@@ -165,7 +170,7 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
 
         // Playback controls (work in any view)
         KeyCode::Char(' ') => {
-            if group.playback.as_ref().is_some_and(|p| p.is_playing) {
+            if group.playback.is_some_and(|p| p.is_playing) {
                 GroupAction::Pause
             } else {
                 GroupAction::Play
@@ -214,11 +219,7 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
             .bg(Color::DarkGray)
             .add_modifier(Modifier::BOLD),
     )];
-    match state
-        .last_error
-        .as_ref()
-        .filter(|err| err.at.elapsed() < ERROR_DISPLAY_TIME)
-    {
+    match state.last_error.as_ref().filter(|err| is_shown(err)) {
         Some(err) => header.push(Span::styled(
             format!(" -- {}", err.message),
             Style::default().fg(Color::Red),
@@ -231,8 +232,8 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
     let title = Paragraph::new(Line::from(header));
     frame.render_widget(title, title_area);
 
-    let vol_text = match &group.playback {
-        Some(playback) => format!("🔊: {:2} ", playback.volume),
+    let vol_text = match group.volume {
+        Some(volume) => format!("🔊: {volume:2} "),
         None => "🔊: -- ".to_owned(),
     };
     let vol = Paragraph::new(vol_text).alignment(Right);
@@ -268,9 +269,9 @@ fn render_view_tabs(ui: &UiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(tabs, area);
 }
 
-fn render_queue(playback: Option<&Playback>, frame: &mut Frame, area: Rect) {
-    let now_playing = playback.and_then(|p| p.now_playing.as_ref());
-    let next_track = playback.and_then(|p| p.next_track.as_ref());
+fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
+    let now_playing = group.now_playing.as_ref();
+    let next_track = group.next_track.as_ref();
 
     // Only the current and next tracks are known: select the current one (if any)
     let mut list_state = ListState::default();
@@ -301,22 +302,28 @@ fn render_queue(playback: Option<&Playback>, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_playbar(playback: Option<&Playback>, frame: &mut Frame, area: Rect) {
-    let now_playing = playback.and_then(|p| p.now_playing.as_ref().map(|track| (p, track)));
-    let (np, label, ratio) = if let Some((playback, track)) = now_playing {
+fn render_playbar(group: &GroupState, frame: &mut Frame, area: Rect) {
+    let playback = group.playback;
+    let (np, label, ratio) = if let Some(track) = &group.now_playing {
         let duration = track.duration_secs.unwrap_or(0);
+        let elapsed = playback.map_or(0, |p| {
+            let elapsed = u32::try_from(p.position(Instant::now()).as_secs()).unwrap_or(u32::MAX);
+            // The position is worked out locally, and can run past the end of the track until the
+            // speakers report the next one.
+            if duration != 0 {
+                elapsed.min(duration)
+            } else {
+                elapsed
+            }
+        });
         let percent = if duration != 0 {
-            f64::clamp(
-                f64::from(playback.elapsed_secs) / f64::from(duration),
-                0.0,
-                1.0,
-            )
+            f64::clamp(f64::from(elapsed) / f64::from(duration), 0.0, 1.0)
         } else {
             0.0
         };
         let label = format!(
             "{} / {}",
-            format_duration(playback.elapsed_secs),
+            format_duration(elapsed),
             format_duration(duration)
         );
         let title = format!(" {} ", format_track(track));
@@ -390,6 +397,10 @@ fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, are
         );
 
     frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn is_shown(error: &ErrorMessage) -> bool {
+    error.at.elapsed() < ERROR_DISPLAY_TIME
 }
 
 fn format_track(track: &TrackInfo) -> String {
