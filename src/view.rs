@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -17,7 +20,7 @@ use ratatui::{
         Tabs, Wrap,
     },
 };
-use sinuous_client::GroupId;
+use sinuous_client::{GroupId, PlayerId};
 
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, TrackInfo,
@@ -41,6 +44,17 @@ pub struct UiState {
     selected_favorite: usize,
     /// The group highlighted in the group picker, if it is open.
     group_picker: Option<usize>,
+    group_editor: Option<GroupEditor>,
+}
+
+/// Speakers being added to or removed from a group.
+#[derive(Debug)]
+struct GroupEditor {
+    group: GroupId,
+    /// The index of the highlighted speaker in [`HouseholdState::players`].
+    highlighted: usize,
+    /// The speakers to have in the group.
+    members: HashSet<PlayerId>,
 }
 
 impl UiState {
@@ -61,6 +75,18 @@ impl UiState {
         } else if let Some(highlighted) = &mut self.group_picker {
             *highlighted = (*highlighted).min(state.groups.len() - 1);
         }
+        if self
+            .group_editor
+            .as_ref()
+            .is_some_and(|editor| state.group(&editor.group).is_none())
+        {
+            self.group_editor = None;
+        }
+        if let Some(editor) = &mut self.group_editor {
+            editor.highlighted = editor
+                .highlighted
+                .min(state.players.len().saturating_sub(1));
+        }
     }
 
     /// The selected group and its index.
@@ -74,6 +100,23 @@ impl UiState {
         if let Some((index, _)) = self.current_group(state) {
             self.group_picker = Some(index);
         }
+    }
+
+    /// Open the group editor for the selected group, with its coordinator highlighted.
+    fn open_group_editor(&mut self, state: &HouseholdState) {
+        let Some((_, group)) = self.current_group(state) else {
+            return;
+        };
+        let highlighted = state
+            .players
+            .iter()
+            .position(|p| p.id == group.coordinator_id)
+            .unwrap_or(0);
+        self.group_editor = Some(GroupEditor {
+            group: group.id.clone(),
+            highlighted,
+            members: group.player_ids.iter().cloned().collect(),
+        });
     }
 }
 
@@ -127,9 +170,12 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
         ViewMode::Favorites => render_favorites(state, ui, frame, content),
     }
 
-    // Group picker, on top of everything else
+    // Popups, on top of everything else
     if let Some(highlighted) = ui.group_picker {
         render_group_picker(state, group_index, highlighted, frame);
+    }
+    if let Some(editor) = &ui.group_editor {
+        render_group_editor(state, editor, frame);
     }
 }
 
@@ -139,6 +185,9 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
     if let Some(highlighted) = ui.group_picker {
         handle_group_picker_input(input, state, ui, highlighted);
         return None;
+    }
+    if ui.group_editor.is_some() {
+        return handle_group_editor_input(input, state, ui);
     }
     match input.code {
         // View switching
@@ -157,6 +206,7 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
 
         // Group switching
         KeyCode::Char('g') => ui.open_group_picker(state),
+        KeyCode::Char('G') => ui.open_group_editor(state),
 
         _ => return group_command(input, state, ui),
     }
@@ -187,6 +237,55 @@ fn handle_group_picker_input(
         KeyCode::Esc | KeyCode::Char('g') => ui.group_picker = None,
         _ => {}
     }
+}
+
+/// Update `ui` according to the key pressed while the group editor is open, and return the
+/// command changing the members of the group, if any.
+fn handle_group_editor_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+) -> Option<Command> {
+    let editor = ui.group_editor.as_mut()?;
+    let group = state.group(&editor.group)?;
+    match input.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            editor.highlighted = editor.highlighted.saturating_sub(1)
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if editor.highlighted + 1 < state.players.len() {
+                editor.highlighted += 1;
+            }
+        }
+        KeyCode::Char(' ') => {
+            let player = state.players.get(editor.highlighted)?;
+            // The coordinator stays, so that the group keeps playing.
+            if player.id != group.coordinator_id && !editor.members.remove(&player.id) {
+                editor.members.insert(player.id.clone());
+            }
+        }
+        KeyCode::Enter => {
+            let editor = ui.group_editor.take()?;
+            if group.player_ids.iter().cloned().collect::<HashSet<_>>() == editor.members {
+                return None;
+            }
+            let others = state
+                .players
+                .iter()
+                .filter(|p| p.id != group.coordinator_id && editor.members.contains(&p.id))
+                .map(|p| p.id.clone());
+            let players = std::iter::once(group.coordinator_id.clone())
+                .chain(others)
+                .collect();
+            return Some(Command {
+                group: group.id.clone(),
+                action: GroupAction::SetMembers(players),
+            });
+        }
+        KeyCode::Esc | KeyCode::Char('G') => ui.group_editor = None,
+        _ => {}
+    }
+    None
 }
 
 /// The command for the selected group corresponding to the key pressed, if any.
@@ -313,7 +412,7 @@ fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
             Block::bordered()
                 .title_top(" Queue ")
                 .title_bottom(
-                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume • g groups ")
+                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume • g groups • G edit group ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
@@ -410,7 +509,7 @@ fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, are
             Block::bordered()
                 .title_top(" Favorites ")
                 .title_bottom(
-                    Line::from(" ↑↓ Navigate • ENTER to play • g groups ")
+                    Line::from(" ↑↓ Navigate • ENTER to play • g groups • G edit group ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
@@ -428,13 +527,7 @@ fn render_group_picker(
     highlighted: usize,
     frame: &mut Frame,
 ) {
-    const HIGHLIGHT_SYMBOL: &str = "⏵ ";
-    const PADDING: Padding = Padding::symmetric(2, 1);
-    let help = Line::from(" ↑↓ Navigate • ENTER select • ESC close ")
-        .centered()
-        .style(Style::default().fg(Color::DarkGray));
-
-    let lines: Vec<_> = state
+    let lines = state
         .groups
         .iter()
         .enumerate()
@@ -457,6 +550,58 @@ fn render_group_picker(
         })
         .collect();
 
+    render_popup(
+        frame,
+        " Groups ",
+        lines,
+        highlighted,
+        " ↑↓ Navigate • ENTER select • ESC close ",
+    );
+}
+
+/// A popup listing all the speakers, with the ones to have in the group being edited checked.
+fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut Frame) {
+    let Some(group) = state.group(&editor.group) else {
+        return;
+    };
+    let lines = state
+        .players
+        .iter()
+        .map(|player| {
+            let checkbox = if editor.members.contains(&player.id) {
+                "[x] "
+            } else {
+                "[ ] "
+            };
+            let mut spans = vec![Span::raw(checkbox), Span::raw(player.name.as_str())];
+            if player.id == group.coordinator_id {
+                spans.push(Span::styled(
+                    "  coordinator",
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        " Group speakers ",
+        lines,
+        editor.highlighted,
+        " ↑↓ Navigate • SPACE toggle • ENTER apply • ESC cancel ",
+    );
+}
+
+/// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
+/// highlighted.
+fn render_popup(frame: &mut Frame, title: &str, lines: Vec<Line>, highlighted: usize, help: &str) {
+    const HIGHLIGHT_SYMBOL: &str = "⏵ ";
+    const PADDING: Padding = Padding::symmetric(2, 1);
+    let help = Line::from(help)
+        .centered()
+        .style(Style::default().fg(Color::DarkGray));
+
     // Fit the content, plus the padding and the borders
     let content_width = lines.iter().map(Line::width).max().unwrap_or(0)
         + Span::raw(HIGHLIGHT_SYMBOL).width()
@@ -477,7 +622,7 @@ fn render_group_picker(
             Block::bordered()
                 .border_type(Rounded)
                 .padding(PADDING)
-                .title_top(" Groups ")
+                .title_top(title)
                 .title_bottom(help),
         );
 
@@ -503,4 +648,104 @@ fn format_duration(secs: u32) -> String {
     let seconds = secs % 60;
 
     format!("{minutes}:{seconds:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::KeyModifiers;
+
+    use super::*;
+    use crate::sonos::PlayerInfo;
+
+    fn household() -> HouseholdState {
+        let player = |id: &str, name: &str| PlayerInfo {
+            id: id.into(),
+            name: name.to_owned(),
+        };
+        HouseholdState {
+            groups: vec![
+                GroupState::new(
+                    "bedroom".into(),
+                    "Bedroom + Office".to_owned(),
+                    "b".into(),
+                    vec!["b".into(), "o".into()],
+                ),
+                GroupState::new(
+                    "kitchen".into(),
+                    "Kitchen".to_owned(),
+                    "k".into(),
+                    vec!["k".into()],
+                ),
+            ],
+            players: vec![
+                player("b", "Bedroom"),
+                player("k", "Kitchen"),
+                player("o", "Office"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn press(keys: &[KeyCode], state: &HouseholdState, ui: &mut UiState) -> Option<Command> {
+        keys.iter().fold(None, |_, code| {
+            handle_input(&KeyEvent::new(*code, KeyModifiers::NONE), state, ui)
+        })
+    }
+
+    #[test]
+    fn group_editor_sets_members_with_coordinator_first() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let command = press(
+            &[
+                KeyCode::Char('G'),
+                // The coordinator can't be removed
+                KeyCode::Char(' '),
+                // Add the kitchen
+                KeyCode::Char('j'),
+                KeyCode::Char(' '),
+                // Remove the office
+                KeyCode::Char('j'),
+                KeyCode::Char(' '),
+                KeyCode::Enter,
+            ],
+            &state,
+            &mut ui,
+        );
+
+        let Some(Command {
+            group,
+            action: GroupAction::SetMembers(players),
+        }) = command
+        else {
+            panic!("Unexpected command: {command:?}");
+        };
+        assert_eq!(group, GroupId::from("bedroom"));
+        assert_eq!(players, [PlayerId::from("b"), PlayerId::from("k")]);
+        assert!(ui.group_editor.is_none());
+    }
+
+    #[test]
+    fn group_editor_does_nothing_unless_members_change() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let keys = [
+            KeyCode::Char('G'),
+            KeyCode::Char('j'),
+            KeyCode::Char(' '),
+            KeyCode::Char(' '),
+            KeyCode::Enter,
+        ];
+        assert!(press(&keys, &state, &mut ui).is_none());
+        assert!(ui.group_editor.is_none());
+
+        let keys = [KeyCode::Char('G'), KeyCode::Char('j'), KeyCode::Char(' ')];
+        assert!(press(&keys, &state, &mut ui).is_none());
+        assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
+        assert!(ui.group_editor.is_none());
+    }
 }

@@ -19,6 +19,7 @@ need to be on the same network (or visible from your current network).
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
 - <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
 - <kbd>g</kbd>: Switch to another group
+- <kbd>G</kbd>: Add speakers to / remove speakers from the current group
 - <kbd>1</kbd> / <kbd>2</kbd>: Show the queue / favorites
 - <kbd>q</kbd>: Quit
 
@@ -42,4 +43,4 @@ found in `/tmp/sinuous.log`.
 - [ ] Allow searching for tracks and modify the queue
 - [ ] Allow customizing colours
 - [x] Allow specifying speaker to connect to as a command line argument
-- [ ] Handle grouping of speakers
+- [x] Handle grouping of speakers

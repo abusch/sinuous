@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use futures::{StreamExt, future};
 use sinuous_client::{
-    Event, EventPayload, FavoriteId, GroupId, Household, Subscription, Topology,
+    Event, EventPayload, FavoriteId, GroupId, Household, PlayerId, Subscription, Topology,
     favorites::Favorite,
     playback::{LoadAction, LoadOptions, PlaybackState, PlaybackStatus},
     playback_metadata::{QueueItem, Track},
@@ -46,8 +46,16 @@ pub struct HouseholdState {
     pub status: ConnectionStatus,
     /// Sorted by name.
     pub groups: Vec<GroupState>,
+    /// Sorted by name.
+    pub players: Vec<PlayerInfo>,
     pub favorites: Arc<[Favorite]>,
     pub last_error: Option<ErrorMessage>,
+}
+
+impl HouseholdState {
+    pub fn group(&self, id: &GroupId) -> Option<&GroupState> {
+        self.groups.iter().find(|g| &g.id == id)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,6 +87,8 @@ impl ErrorMessage {
 pub struct GroupState {
     pub id: GroupId,
     pub name: String,
+    pub coordinator_id: PlayerId,
+    pub player_ids: Vec<PlayerId>,
     pub playback: Option<Playback>,
     pub volume: Option<u8>,
     pub now_playing: Option<TrackInfo>,
@@ -86,16 +96,29 @@ pub struct GroupState {
 }
 
 impl GroupState {
-    fn new(id: GroupId, name: String) -> Self {
+    pub fn new(
+        id: GroupId,
+        name: String,
+        coordinator_id: PlayerId,
+        player_ids: Vec<PlayerId>,
+    ) -> Self {
         Self {
             id,
             name,
+            coordinator_id,
+            player_ids,
             playback: None,
             volume: None,
             now_playing: None,
             next_track: None,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayerInfo {
+    pub id: PlayerId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -180,6 +203,8 @@ pub enum GroupAction {
     Previous,
     AdjustVolume(i8),
     LoadFavorite(FavoriteId),
+    /// Make these players the members of the group. The coordinator must come first.
+    SetMembers(Vec<PlayerId>),
 }
 
 /// The UI's side of the service.
@@ -353,14 +378,19 @@ impl Service {
         }
     }
 
-    /// Update the groups from the household's topology, keeping what we know about them.
+    /// Update the groups and players from the household's topology, keeping what we know about
+    /// the groups.
     fn update_groups(&mut self) {
-        let groups = group_states(&self.topology_rx.borrow_and_update());
+        let (groups, players) = {
+            let topology = self.topology_rx.borrow_and_update();
+            (group_states(&topology), player_infos(&topology))
+        };
         self.subscribed
             .retain(|id| groups.iter().any(|group| &group.id == id));
         self.state_tx.send_modify(|state| {
             let old_groups = std::mem::replace(&mut state.groups, groups);
             keep_group_states(&mut state.groups, &old_groups);
+            state.players = players;
         });
         self.subscribe_to_groups();
     }
@@ -490,6 +520,12 @@ async fn run_command(household: &Household, command: &Command) -> Result<()> {
                 .await
                 .context("Failed to play favorite")?;
         }
+        GroupAction::SetMembers(players) => {
+            group
+                .set_members(players)
+                .await
+                .context("Failed to group speakers")?;
+        }
     }
     Ok(())
 }
@@ -575,22 +611,40 @@ fn group_states(topology: &Topology) -> Vec<GroupState> {
             } else {
                 names.join(" + ")
             };
-            GroupState::new(group.id.clone(), name)
+            GroupState::new(
+                group.id.clone(),
+                name,
+                group.coordinator_id.clone(),
+                group.player_ids.clone(),
+            )
         })
         .collect();
     groups.sort_by(|a, b| a.name.cmp(&b.name));
     groups
 }
 
+/// The players of the household, sorted by name.
+fn player_infos(topology: &Topology) -> Vec<PlayerInfo> {
+    let mut players: Vec<_> = topology
+        .players
+        .iter()
+        .map(|player| PlayerInfo {
+            id: player.id.clone(),
+            name: player.name.clone(),
+        })
+        .collect();
+    players.sort_by(|a, b| a.name.cmp(&b.name));
+    players
+}
+
 /// Copy what we know about the groups in `old_groups` to the same groups in `groups`.
 fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
     for group in groups {
         if let Some(old) = old_groups.iter().find(|old| old.id == group.id) {
-            let name = std::mem::take(&mut group.name);
-            *group = GroupState {
-                name,
-                ..old.clone()
-            };
+            group.playback = old.playback;
+            group.volume = old.volume;
+            group.now_playing.clone_from(&old.now_playing);
+            group.next_track.clone_from(&old.next_track);
         }
     }
 }
@@ -645,18 +699,39 @@ mod tests {
 
     #[test]
     fn group_states_are_kept_across_topology_changes() {
-        let mut kitchen = GroupState::new("kitchen".into(), "Kitchen".to_owned());
+        let mut kitchen = GroupState::new(
+            "kitchen".into(),
+            "Kitchen".to_owned(),
+            "k".into(),
+            vec!["k".into()],
+        );
         kitchen.volume = Some(20);
-        let office = GroupState::new("office".into(), "Office".to_owned());
+        let office = GroupState::new(
+            "office".into(),
+            "Office".to_owned(),
+            "o".into(),
+            vec!["o".into()],
+        );
         let old_groups = [kitchen, office];
 
         let mut groups = [
-            GroupState::new("kitchen".into(), "Kitchen + Office".to_owned()),
-            GroupState::new("bedroom".into(), "Bedroom".to_owned()),
+            GroupState::new(
+                "kitchen".into(),
+                "Kitchen + Office".to_owned(),
+                "k".into(),
+                vec!["k".into(), "o".into()],
+            ),
+            GroupState::new(
+                "bedroom".into(),
+                "Bedroom".to_owned(),
+                "b".into(),
+                vec!["b".into()],
+            ),
         ];
         keep_group_states(&mut groups, &old_groups);
 
         assert_eq!(groups[0].name, "Kitchen + Office");
+        assert_eq!(groups[0].player_ids, ["k".into(), "o".into()]);
         assert_eq!(groups[0].volume, Some(20));
         assert_eq!(groups[1].name, "Bedroom");
         assert_eq!(groups[1].volume, None);
