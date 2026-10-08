@@ -5,7 +5,7 @@
 
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
-It currently allows you to cycle through the different groups (zone players),
+It currently allows you to switch between the different groups (zone players),
 displays the current and next tracks, and lets you play your Sonos favorites.
 
 Note: `sinuous` directly talks to the Sonos speakers via their local websocket
@@ -18,7 +18,8 @@ need to be on the same network (or visible from your current network).
 - <kbd>Space</kbd>: Play / Pause
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
 - <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
-- <kbd>Shift+Tab</kbd> / <kbd>Tab</kbd>: Switch to previous / next group
+- <kbd>g</kbd>: Switch to another group
+- <kbd>1</kbd> / <kbd>2</kbd>: Show the queue / favorites
 - <kbd>q</kbd>: Quit
 
 ## To run

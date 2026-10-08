@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use clap::crate_version;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{
@@ -13,7 +13,8 @@ use ratatui::{
     symbols::line::VERTICAL,
     text::{Line, Span},
     widgets::{
-        Block, BorderType::Rounded, Gauge, List, ListItem, ListState, Paragraph, Tabs, Wrap,
+        Block, BorderType::Rounded, Clear, Gauge, List, ListItem, ListState, Padding, Paragraph,
+        Tabs, Wrap,
     },
 };
 use sinuous_client::GroupId;
@@ -38,6 +39,8 @@ pub struct UiState {
     view: ViewMode,
     selected_group: Option<GroupId>,
     selected_favorite: usize,
+    /// The group highlighted in the group picker, if it is open.
+    group_picker: Option<usize>,
 }
 
 impl UiState {
@@ -53,6 +56,11 @@ impl UiState {
         self.selected_favorite = self
             .selected_favorite
             .min(state.favorites.len().saturating_sub(1));
+        if state.groups.is_empty() {
+            self.group_picker = None;
+        } else if let Some(highlighted) = &mut self.group_picker {
+            *highlighted = (*highlighted).min(state.groups.len() - 1);
+        }
     }
 
     /// The selected group and its index.
@@ -61,18 +69,11 @@ impl UiState {
         state.groups.iter().enumerate().find(|(_, g)| &g.id == id)
     }
 
-    fn select_group(&mut self, state: &HouseholdState, forward: bool) {
-        let len = state.groups.len();
-        if len == 0 {
-            return;
+    /// Open the group picker, with the selected group highlighted.
+    fn open_group_picker(&mut self, state: &HouseholdState) {
+        if let Some((index, _)) = self.current_group(state) {
+            self.group_picker = Some(index);
         }
-        let index = self.current_group(state).map_or(0, |(i, _)| i);
-        let index = if forward {
-            (index + 1) % len
-        } else {
-            (index + len - 1) % len
-        };
-        self.selected_group = Some(state.groups[index].id.clone());
     }
 }
 
@@ -103,9 +104,8 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, "No speakers found.\n\nPress q to quit.");
     };
-    let [title, tabs, playbar, view_tabs, content] = Layout::vertical([
+    let [title, playbar, view_tabs, content] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Min(1),
@@ -114,9 +114,6 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
 
     // Title line
     render_title_bar(state, group, frame, title);
-
-    // Group tabs
-    render_tabs(state, group_index, frame, tabs);
 
     // playbar
     render_playbar(group, frame, playbar);
@@ -129,11 +126,20 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
         ViewMode::Queue => render_queue(group, frame, content),
         ViewMode::Favorites => render_favorites(state, ui, frame, content),
     }
+
+    // Group picker, on top of everything else
+    if let Some(highlighted) = ui.group_picker {
+        render_group_picker(state, group_index, highlighted, frame);
+    }
 }
 
 /// Update `ui` according to the key pressed, and return the command to send to the speakers, if
 /// any.
 pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) -> Option<Command> {
+    if let Some(highlighted) = ui.group_picker {
+        handle_group_picker_input(input, state, ui, highlighted);
+        return None;
+    }
     match input.code {
         // View switching
         KeyCode::Char('1') => ui.view = ViewMode::Queue,
@@ -150,12 +156,37 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
         }
 
         // Group switching
-        KeyCode::BackTab => ui.select_group(state, false),
-        KeyCode::Tab => ui.select_group(state, !input.modifiers.contains(KeyModifiers::SHIFT)),
+        KeyCode::Char('g') => ui.open_group_picker(state),
 
         _ => return group_command(input, state, ui),
     }
     None
+}
+
+/// Update `ui` according to the key pressed while the group picker is open, with the group at
+/// index `highlighted` highlighted.
+fn handle_group_picker_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    highlighted: usize,
+) {
+    match input.code {
+        KeyCode::Up | KeyCode::Char('k') => ui.group_picker = Some(highlighted.saturating_sub(1)),
+        KeyCode::Down | KeyCode::Char('j') => {
+            if highlighted + 1 < state.groups.len() {
+                ui.group_picker = Some(highlighted + 1);
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(group) = state.groups.get(highlighted) {
+                ui.selected_group = Some(group.id.clone());
+            }
+            ui.group_picker = None;
+        }
+        KeyCode::Esc | KeyCode::Char('g') => ui.group_picker = None,
+        _ => {}
+    }
 }
 
 /// The command for the selected group corresponding to the key pressed, if any.
@@ -240,16 +271,6 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
     frame.render_widget(vol, volume_area);
 }
 
-fn render_tabs(state: &HouseholdState, selected: usize, frame: &mut Frame, area: Rect) {
-    let tabs = Tabs::new(state.groups.iter().map(|g| g.name.as_str()))
-        .block(Block::bordered().border_type(Rounded).title(" Groups "))
-        .highlight_style(Style::default().fg(Color::Green))
-        .select(selected)
-        .divider(VERTICAL);
-
-    frame.render_widget(tabs, area);
-}
-
 fn render_view_tabs(ui: &UiState, frame: &mut Frame, area: Rect) {
     let view_names = vec!["1 Queue", "2 Favorites"];
     let selected = match ui.view {
@@ -292,7 +313,7 @@ fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
             Block::bordered()
                 .title_top(" Queue ")
                 .title_bottom(
-                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume ")
+                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume • g groups ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
@@ -389,13 +410,78 @@ fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, are
             Block::bordered()
                 .title_top(" Favorites ")
                 .title_bottom(
-                    Line::from(" ↑↓ Navigate • ENTER to play ")
+                    Line::from(" ↑↓ Navigate • ENTER to play • g groups ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
                 .border_type(Rounded),
         );
 
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+/// A popup listing the groups, with the selected group (at `selected`) in green and the one at
+/// `highlighted` highlighted.
+fn render_group_picker(
+    state: &HouseholdState,
+    selected: usize,
+    highlighted: usize,
+    frame: &mut Frame,
+) {
+    const HIGHLIGHT_SYMBOL: &str = "⏵ ";
+    const PADDING: Padding = Padding::symmetric(2, 1);
+    let help = Line::from(" ↑↓ Navigate • ENTER select • ESC close ")
+        .centered()
+        .style(Style::default().fg(Color::DarkGray));
+
+    let lines: Vec<_> = state
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, group)| {
+            let name_style = if i == selected {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default()
+            };
+            let mut spans = vec![Span::styled(group.name.as_str(), name_style)];
+            if group.playback.is_some_and(|p| p.is_playing)
+                && let Some(track) = &group.now_playing
+            {
+                spans.push(Span::styled(
+                    format!("  ♪ {}", track.title.as_deref().unwrap_or("Unknown")),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+
+    // Fit the content, plus the padding and the borders
+    let content_width = lines.iter().map(Line::width).max().unwrap_or(0)
+        + Span::raw(HIGHLIGHT_SYMBOL).width()
+        + usize::from(PADDING.left + PADDING.right);
+    let width = u16::try_from(content_width.max(help.width()) + 2).unwrap_or(u16::MAX);
+    let height = u16::try_from(lines.len() + usize::from(PADDING.top + PADDING.bottom) + 2)
+        .unwrap_or(u16::MAX);
+    let area = frame
+        .area()
+        .centered(Constraint::Length(width), Constraint::Length(height));
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(highlighted));
+    let list = List::new(lines)
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol(HIGHLIGHT_SYMBOL)
+        .block(
+            Block::bordered()
+                .border_type(Rounded)
+                .padding(PADDING)
+                .title_top(" Groups ")
+                .title_bottom(help),
+        );
+
+    frame.render_widget(Clear, area);
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
