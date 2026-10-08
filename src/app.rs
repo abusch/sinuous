@@ -5,6 +5,7 @@ use clap::ArgMatches;
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
+use ratatui_image::picker::{Picker, ProtocolType};
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
@@ -12,6 +13,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
+    artwork::Artwork,
     input,
     sonos::{self, ProvidedDevices},
     view::{self, UiState},
@@ -51,6 +53,29 @@ impl App {
         // Whether the service is still running, i.e. whether the state may still change.
         let mut service_running = true;
 
+        // Before reading key presses: this reads the terminal's answers to queries.
+        // Terminals that don't answer the queries delay startup, and the first key pressed may
+        // be lost: ratatui-image keeps waiting for an answer in the background.
+        let started = std::time::Instant::now();
+        let mut picker = Picker::from_query_stdio().unwrap_or_else(|err| {
+            warn!("Failed to query the terminal's graphics support: {err}");
+            Picker::halfblocks()
+        });
+        debug!(
+            protocol = ?picker.protocol_type(),
+            font_size = ?picker.font_size(),
+            elapsed = ?started.elapsed(),
+            "Queried the terminal's graphics support"
+        );
+        // Zellij supports the Kitty protocol, but not yet the Unicode placeholders ratatui-image
+        // draws Kitty images with (https://github.com/zellij-org/zellij/pull/5531), nor iTerm2's
+        // protocol. It only reports Sixel when the terminal it runs in supports it.
+        if std::env::var_os("ZELLIJ").is_some() && picker.protocol_type() != ProtocolType::Sixel {
+            debug!("Running in Zellij: using coloured blocks for images");
+            picker.set_protocol_type(ProtocolType::Halfblocks);
+        }
+        let (mut artwork, mut loaded_rx) = Artwork::new(picker);
+
         let mut ui = UiState::default();
         let mut events = EventStream::new();
         let mut redraw = time::interval(REDRAW_INTERVAL);
@@ -60,7 +85,8 @@ impl App {
         loop {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
-            terminal.draw(|f| view::render_ui(f, &state, &ui))?;
+            artwork.show(view::artwork_url(&state, &ui));
+            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork))?;
             let animated = view::is_animated(&state, &ui);
 
             select! {
@@ -75,6 +101,7 @@ impl App {
                         }
                     }
                 }
+                Some(loaded) = loaded_rx.recv() => artwork.loaded(loaded),
                 _ = redraw.tick(), if animated => {}
                 changed = state_rx.changed(), if service_running => {
                     if changed.is_err() {

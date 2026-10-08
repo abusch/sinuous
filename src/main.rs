@@ -4,6 +4,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 mod app;
+mod artwork;
 mod input;
 mod sonos;
 mod view;

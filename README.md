@@ -6,7 +6,11 @@
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
 It currently allows you to switch between the different groups (zone players),
-displays the current and next tracks, and lets you play your Sonos favorites.
+displays the current and next tracks with their album art, and lets you play
+your Sonos favorites.
+
+Album art is drawn with the Kitty, iTerm2 or Sixel graphics protocols in
+terminals that support one of them, and with coloured blocks otherwise.
 
 Note: `sinuous` directly talks to the Sonos speakers via their local websocket
 API (using [sinuous-client](https://github.com/abusch/sinuous-client)), and the

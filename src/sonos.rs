@@ -19,7 +19,7 @@ use sinuous_client::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
         PlaybackStatus,
     },
-    playback_metadata::{MetadataStatus, QueueItem, Tag, Track},
+    playback_metadata::{ImageUrl, MetadataStatus, QueueItem, Tag, Track},
 };
 use tokio::{
     select,
@@ -28,6 +28,7 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often to retry subscriptions that failed, e.g. because a speaker couldn't be reached. Once
@@ -196,6 +197,8 @@ pub struct TrackInfo {
     /// Whether the album is tagged explicit. Tracks have no tags of their own.
     pub album_explicit: bool,
     pub duration_secs: Option<u32>,
+    /// The album art, or another picture of what is playing.
+    pub image_url: Option<Url>,
 }
 
 impl From<&Track> for TrackInfo {
@@ -213,6 +216,7 @@ impl From<&Track> for TrackInfo {
                 .as_ref()
                 .is_some_and(|a| a.tags.contains(&Tag::TagExplicit)),
             duration_secs: track.duration_millis.map(millis_to_secs),
+            image_url: None,
         }
     }
 }
@@ -417,6 +421,12 @@ impl Service {
             }
             payload => {
                 let Some(id) = event.group_id else { return };
+                // Images served by the coordinator are given relative to it.
+                let coordinator_url = self
+                    .topology_rx
+                    .borrow()
+                    .coordinator(&id)
+                    .map(|p| p.websocket_url.clone());
                 self.state_tx.send_if_modified(|state| {
                     let Some(group) = state.groups.iter_mut().find(|g| g.id == id) else {
                         return false;
@@ -426,8 +436,21 @@ impl Service {
                             group.playback = Some(Playback::new(&status, Instant::now()));
                         }
                         EventPayload::MetadataStatus(metadata) => {
-                            group.now_playing = metadata.current_item.as_ref().and_then(track_info);
-                            group.next_track = metadata.next_item.as_ref().and_then(track_info);
+                            let images = Images {
+                                coordinator_url: coordinator_url.as_ref(),
+                                fallback: metadata
+                                    .container
+                                    .as_ref()
+                                    .and_then(|c| c.image_url.as_ref()),
+                            };
+                            group.now_playing = metadata
+                                .current_item
+                                .as_ref()
+                                .and_then(|item| track_info(item, &images));
+                            group.next_track = metadata
+                                .next_item
+                                .as_ref()
+                                .and_then(|item| track_info(item, &images));
                             group.source = Source::new(&metadata);
                         }
                         EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
@@ -768,11 +791,36 @@ fn keep_player_volumes(players: &mut [PlayerInfo], old_players: &[PlayerInfo]) {
     }
 }
 
+/// How to find the images of tracks.
+struct Images<'a> {
+    /// The websocket URL of the player that sent the tracks.
+    coordinator_url: Option<&'a Url>,
+    /// The image to use for tracks without one, e.g. the logo of a radio station.
+    fallback: Option<&'a ImageUrl>,
+}
+
+impl Images<'_> {
+    fn resolve(&self, track: &Track) -> Option<Url> {
+        let image = track
+            .image_url
+            .as_ref()
+            .or_else(|| track.album.as_ref()?.image_url.as_ref())
+            .or(self.fallback)?;
+        match self.coordinator_url {
+            Some(coordinator_url) => image.resolve(coordinator_url),
+            None => Url::parse(image.as_str()).ok(),
+        }
+    }
+}
+
 /// Players report items with an empty track when there is nothing to show, e.g. for a suspended
 /// Spotify Connect session.
-fn track_info(item: &QueueItem) -> Option<TrackInfo> {
+fn track_info(item: &QueueItem, images: &Images) -> Option<TrackInfo> {
     item.track.name.as_ref()?;
-    Some((&item.track).into())
+    Some(TrackInfo {
+        image_url: images.resolve(&item.track),
+        ..(&item.track).into()
+    })
 }
 
 fn millis_to_secs(millis: u64) -> u32 {

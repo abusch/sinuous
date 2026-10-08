@@ -19,11 +19,14 @@ use ratatui::{
         Paragraph, Wrap,
     },
 };
+use ratatui_image::{FilterType, Resize, StatefulImage};
 use sinuous_client::{
     GroupId, PlayerId,
     playback::{PlayModes, PlayModesUpdate, PlaybackActions},
 };
+use url::Url;
 
+use crate::artwork::Artwork;
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
     Source, TrackInfo,
@@ -99,6 +102,13 @@ impl UiState {
             .map(|(highlighted, rows)| highlighted.min(rows - 1));
     }
 
+    fn popup_open(&self) -> bool {
+        self.group_picker.is_some()
+            || self.group_editor.is_some()
+            || self.volume_mixer.is_some()
+            || self.favorites_picker.is_some()
+    }
+
     /// The selected group and its index.
     fn current_group<'a>(&self, state: &'a HouseholdState) -> Option<(usize, &'a GroupState)> {
         let id = self.selected_group.as_ref()?;
@@ -130,6 +140,12 @@ impl UiState {
     }
 }
 
+/// The album art to show.
+pub fn artwork_url<'a>(state: &'a HouseholdState, ui: &UiState) -> Option<&'a Url> {
+    let (_, group) = ui.current_group(state)?;
+    group.now_playing.as_ref()?.image_url.as_ref()
+}
+
 /// Whether what is displayed changes over time, and so needs redrawing even when the state doesn't
 /// change.
 pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
@@ -141,7 +157,7 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     showing_error || advancing
 }
 
-pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
+pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState, artwork: &mut Artwork) {
     match &state.status {
         ConnectionStatus::Connecting => {
             return render_message(frame, "Connecting to your Sonos speakers...");
@@ -161,7 +177,8 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
     render_title_bar(state, group, frame, title);
-    render_now_playing(group, frame, now_playing);
+    // Images can be drawn on top of the text, so hide the album art behind popups.
+    render_now_playing(group, frame, now_playing, artwork, !ui.popup_open());
 
     // Popups, on top of everything else
     if let Some(highlighted) = ui.favorites_picker {
@@ -501,7 +518,19 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
 }
 
 /// The track playing on `group`, how far into it playback is, and the next track.
-fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
+fn render_now_playing(
+    group: &GroupState,
+    frame: &mut Frame,
+    area: Rect,
+    artwork: &mut Artwork,
+    draw_art: bool,
+) {
+    // Everything but the album art: source, track information, progress, play modes and next
+    // track, with the gaps between them.
+    const DETAILS_HEIGHT: u16 = 12;
+    const MAX_ART_HEIGHT: u16 = 16;
+    const MIN_ART_HEIGHT: u16 = 4;
+
     let block = Block::bordered()
         .border_type(Rounded)
         .title_top(" Now playing ")
@@ -509,7 +538,20 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Make room for the art even before it is loaded, so that the rest doesn't move when it is.
+    // Keep a gap below it, and at least one empty line above and below everything.
+    let art_height = if artwork.is_wanted() {
+        let height = inner
+            .height
+            .saturating_sub(DETAILS_HEIGHT + 3)
+            .min(MAX_ART_HEIGHT);
+        if height >= MIN_ART_HEIGHT { height } else { 0 }
+    } else {
+        0
+    };
     let [
+        _,
+        art_area,
         _,
         source_area,
         _,
@@ -522,6 +564,8 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
         _,
     ] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(art_height),
+        Constraint::Length(if art_height > 0 { 1 } else { 0 }),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(3),
@@ -533,6 +577,20 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
         Constraint::Fill(1),
     ])
     .areas(inner);
+
+    if draw_art && art_height > 0 {
+        // Album art is usually square: make it as wide as it is high.
+        let font = artwork.font_size();
+        let width = u32::from(art_height) * u32::from(font.height) / u32::from(font.width.max(1));
+        let width = u16::try_from(width).unwrap_or(u16::MAX);
+        if let Some(image) = artwork.image() {
+            frame.render_stateful_widget(
+                StatefulImage::default().resize(Resize::Scale(Some(FilterType::Triangle))),
+                art_area.centered_horizontally(Constraint::Length(width)),
+                image,
+            );
+        }
+    }
 
     if let Some(source) = &group.source {
         frame.render_widget(Paragraph::new(source_line(source)).centered(), source_area);
