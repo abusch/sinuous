@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use futures::StreamExt;
 use sinuous_client::{
     FavoriteId, GroupId, Household, Topology,
     favorites::Favorite,
@@ -389,15 +390,16 @@ async fn connect_household(devices: ProvidedDevices) -> Result<Household> {
     }
 
     debug!("Discovering speakers...");
-    let players = sinuous_client::discover(DISCOVERY_TIMEOUT).await?;
-    info!("Found {} speakers", players.len());
+    let mut players = sinuous_client::discover_stream(DISCOVERY_TIMEOUT).await?;
 
-    // Players from several households may answer: try one player from each.
+    // Use the first player that answers. Players from several households may answer: try one
+    // player from each.
     let mut tried_households = HashSet::new();
-    for player in &players {
-        if !tried_households.insert(&player.household_id) {
+    while let Some(player) = players.next().await {
+        if !tried_households.insert(player.household_id.clone()) {
             continue;
         }
+        info!("Connecting to {} at {}", player.player_id, player.address);
         let household = match player.connect().await {
             Ok(conn) => Household::new(conn).await,
             Err(e) => Err(e),
