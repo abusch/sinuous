@@ -19,10 +19,14 @@ use ratatui::{
         Paragraph, Wrap,
     },
 };
-use sinuous_client::{GroupId, PlayerId};
+use sinuous_client::{
+    GroupId, PlayerId,
+    playback::{PlayModes, PlayModesUpdate},
+};
 
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
+    Source, TrackInfo,
 };
 
 /// How long errors are displayed for.
@@ -365,12 +369,37 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
         KeyCode::Char('[') => GroupAction::AdjustVolume(-VOLUME_STEP),
         KeyCode::Char(']') => GroupAction::AdjustVolume(VOLUME_STEP),
 
+        // Play modes
+        KeyCode::Char('s') => GroupAction::SetPlayModes(PlayModesUpdate {
+            shuffle: Some(!group.playback?.play_modes.shuffle),
+            ..Default::default()
+        }),
+        KeyCode::Char('r') => GroupAction::SetPlayModes(next_repeat(group.playback?.play_modes)),
+        KeyCode::Char('c') => GroupAction::SetPlayModes(PlayModesUpdate {
+            crossfade: Some(!group.playback?.play_modes.crossfade),
+            ..Default::default()
+        }),
+
         _ => return None,
     };
     Some(Command::Group {
         group: group.id.clone(),
         action,
     })
+}
+
+/// Cycle through no repeat, repeat all and repeat one.
+fn next_repeat(modes: PlayModes) -> PlayModesUpdate {
+    let (repeat, repeat_one) = match (modes.repeat, modes.repeat_one) {
+        (false, false) => (true, false),
+        (true, false) => (false, true),
+        (_, true) => (false, false),
+    };
+    PlayModesUpdate {
+        repeat: Some(repeat),
+        repeat_one: Some(repeat_one),
+        ..Default::default()
+    }
 }
 
 /// Display a message in place of the main UI.
@@ -438,16 +467,34 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let [_, info_area, _, progress_area, _, next_area, _] = Layout::vertical([
+    let [
+        _,
+        source_area,
+        _,
+        info_area,
+        _,
+        progress_area,
+        modes_area,
+        _,
+        next_area,
+        _,
+    ] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
     ])
     .areas(inner);
+
+    if let Some(source) = &group.source {
+        frame.render_widget(Paragraph::new(source_line(source)).centered(), source_area);
+    }
 
     // Track information
     let info = match &group.now_playing {
@@ -460,12 +507,7 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
                 track.artist.as_deref().unwrap_or("Unknown artist"),
                 Style::default().fg(Color::Cyan),
             ),
-            Line::styled(
-                track.album.as_deref().unwrap_or("Unknown album"),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            ),
+            album_line(track),
         ],
         None => vec![
             Line::default(),
@@ -478,6 +520,11 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
         group,
         frame,
         progress_area.centered_horizontally(Constraint::Percentage(80)),
+    );
+    let play_modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
+    frame.render_widget(
+        Paragraph::new(play_modes_line(play_modes)).centered(),
+        modes_area,
     );
 
     // Next track
@@ -494,6 +541,84 @@ fn render_now_playing(group: &GroupState, frame: &mut Frame, area: Rect) {
         ]);
         frame.render_widget(Paragraph::new(next).centered(), next_area);
     }
+}
+
+/// Where the music comes from, e.g. `Spotify · Album · Altered State`.
+fn source_line(source: &Source) -> Line<'_> {
+    let kind = source.kind.as_deref().and_then(|kind| match kind {
+        "album" => Some("Album"),
+        "artist" => Some("Artist"),
+        "playlist" => Some("Playlist"),
+        "station" | "program" => Some("Radio"),
+        "show" | "podcast" => Some("Podcast"),
+        kind if kind.starts_with("linein") => Some("Line-in"),
+        _ => None,
+    });
+    let parts = [source.service.as_deref(), kind, source.name.as_deref()];
+    let mut spans = Vec::new();
+    for (i, part) in parts.into_iter().flatten().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        }
+        let style = if i == 0 {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(part, style));
+    }
+    Line::from(spans)
+}
+
+/// The album of `track`, with a badge if it is explicit.
+fn album_line(track: &TrackInfo) -> Line<'_> {
+    let mut spans = vec![Span::styled(
+        track.album.as_deref().unwrap_or("Unknown album"),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+    )];
+    if track.album_explicit {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            " E ",
+            Style::default().fg(Color::Black).bg(Color::Gray),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// The play modes, with the keys toggling them, highlighting the ones that are on.
+fn play_modes_line(modes: PlayModes) -> Line<'static> {
+    let repeat = if modes.repeat_one {
+        "repeat one"
+    } else {
+        "repeat"
+    };
+    let modes = [
+        ("s", "shuffle", modes.shuffle),
+        ("r", repeat, modes.repeat || modes.repeat_one),
+        ("c", "crossfade", modes.crossfade),
+    ];
+    let mut spans = Vec::new();
+    for (i, (key, label, on)) in modes.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.push(Span::styled(
+            format!("{key} "),
+            Style::default().fg(Color::DarkGray),
+        ));
+        let style = if on {
+            Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(label, style));
+    }
+    Line::from(spans)
 }
 
 /// The playback status of `group`, and a bar showing how far into the current track it is.
@@ -900,5 +1025,18 @@ mod tests {
 
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
         assert!(ui.volume_mixer.is_none());
+    }
+
+    #[test]
+    fn repeat_cycles_through_off_all_and_one() {
+        let mut modes = PlayModes::default();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let update = next_repeat(modes);
+            modes.repeat = update.repeat.unwrap();
+            modes.repeat_one = update.repeat_one.unwrap();
+            seen.push((modes.repeat, modes.repeat_one));
+        }
+        assert_eq!(seen, [(true, false), (false, true), (false, false)]);
     }
 }

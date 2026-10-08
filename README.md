@@ -17,6 +17,7 @@ need to be on the same network (or visible from your current network).
 
 - <kbd>Space</kbd>: Play / Pause
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
+- <kbd>s</kbd> / <kbd>r</kbd> / <kbd>c</kbd>: Toggle shuffle / repeat (all, one, off) / crossfade
 - <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
 - <kbd>v</kbd>: Adjust the volume of the current group or of each of its speakers
 - <kbd>g</kbd>: Switch to another group
@@ -40,7 +41,7 @@ found in `/tmp/sinuous.log`.
 
 - [x] Allow switching between speakers
 - [ ] Support more actions (seek forward, backward, change playing mode, volume...)
-- [ ] Display play/pause indicator as well as current play mode (shuffle+repeat)
+- [x] Display play/pause indicator as well as current play mode (shuffle+repeat)
 - [ ] Allow searching for tracks and modify the queue
 - [ ] Allow customizing colours
 - [x] Allow specifying speaker to connect to as a command line argument

@@ -15,8 +15,10 @@ use futures::StreamExt;
 use sinuous_client::{
     Event, EventPayload, FavoriteId, GroupId, Household, PlayerId, Subscription, Topology,
     favorites::Favorite,
-    playback::{LoadAction, LoadOptions, PlaybackState, PlaybackStatus},
-    playback_metadata::{QueueItem, Track},
+    playback::{
+        LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackState, PlaybackStatus,
+    },
+    playback_metadata::{MetadataStatus, QueueItem, Tag, Track},
 };
 use tokio::{
     select,
@@ -100,6 +102,7 @@ pub struct GroupState {
     pub volume: Option<u8>,
     pub now_playing: Option<TrackInfo>,
     pub next_track: Option<TrackInfo>,
+    pub source: Option<Source>,
 }
 
 impl GroupState {
@@ -118,6 +121,7 @@ impl GroupState {
             volume: None,
             now_playing: None,
             next_track: None,
+            source: None,
         }
     }
 }
@@ -133,6 +137,7 @@ pub struct PlayerInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct Playback {
     pub is_playing: bool,
+    pub play_modes: PlayModes,
     /// The position in the current track when it was reported.
     position: Duration,
     /// When `position` was reported, if it is moving forward.
@@ -142,16 +147,20 @@ pub struct Playback {
 impl Playback {
     /// The playback as reported at `now`.
     fn new(status: &PlaybackStatus, now: Instant) -> Self {
-        Self::from_parts(
-            status.playback_state,
-            Duration::from_millis(status.position_millis.unwrap_or(0)),
-            now,
-        )
+        Self {
+            play_modes: status.play_modes,
+            ..Self::from_parts(
+                status.playback_state,
+                Duration::from_millis(status.position_millis.unwrap_or(0)),
+                now,
+            )
+        }
     }
 
     fn from_parts(state: PlaybackState, position: Duration, now: Instant) -> Self {
         Self {
             is_playing: matches!(state, PlaybackState::Playing | PlaybackState::Buffering),
+            play_modes: PlayModes::default(),
             position,
             advancing_since: (state == PlaybackState::Playing).then_some(now),
         }
@@ -179,6 +188,8 @@ pub struct TrackInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// Whether the album is tagged explicit. Tracks have no tags of their own.
+    pub album_explicit: bool,
     pub duration_secs: Option<u32>,
 }
 
@@ -192,8 +203,42 @@ impl From<&Track> for TrackInfo {
             title: track.name.clone(),
             artist: artist.map(|a| a.name.clone()),
             album: track.album.as_ref().map(|a| a.name.clone()),
+            album_explicit: track
+                .album
+                .as_ref()
+                .is_some_and(|a| a.tags.contains(&Tag::TagExplicit)),
             duration_secs: track.duration_millis.map(millis_to_secs),
         }
+    }
+}
+
+/// Where what a group plays comes from, e.g. an album on Spotify.
+#[derive(Debug, Clone)]
+pub struct Source {
+    /// The music service, e.g. `Spotify`.
+    pub service: Option<String>,
+    /// The kind of source, e.g. `album` or `playlist`.
+    pub kind: Option<String>,
+    pub name: Option<String>,
+}
+
+impl Source {
+    fn new(metadata: &MetadataStatus) -> Option<Self> {
+        let container = metadata.container.as_ref();
+        let service = container
+            .and_then(|c| c.service.as_ref())
+            .or_else(|| metadata.current_item.as_ref()?.track.service.as_ref())
+            .map(|s| s.name.clone());
+        let name = container.and_then(|c| c.name.clone());
+        // Idle groups report an empty container.
+        if service.is_none() && name.is_none() {
+            return None;
+        }
+        Some(Self {
+            service,
+            kind: container.and_then(|c| c.r#type.clone()),
+            name,
+        })
     }
 }
 
@@ -220,6 +265,7 @@ pub enum GroupAction {
     LoadFavorite(FavoriteId),
     /// Make these players the members of the group. The coordinator must come first.
     SetMembers(Vec<PlayerId>),
+    SetPlayModes(PlayModesUpdate),
 }
 
 #[derive(Debug)]
@@ -377,6 +423,7 @@ impl Service {
                         EventPayload::MetadataStatus(metadata) => {
                             group.now_playing = metadata.current_item.as_ref().and_then(track_info);
                             group.next_track = metadata.next_item.as_ref().and_then(track_info);
+                            group.source = Source::new(&metadata);
                         }
                         EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
                         _ => return false,
@@ -578,6 +625,10 @@ async fn run_group_command(
                 .await
                 .context("Failed to group speakers")?;
         }
+        GroupAction::SetPlayModes(modes) => group
+            .set_play_modes(modes)
+            .await
+            .context("Failed to change the play modes")?,
     }
     Ok(())
 }
@@ -698,6 +749,7 @@ fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
             group.volume = old.volume;
             group.now_playing.clone_from(&old.now_playing);
             group.next_track.clone_from(&old.next_track);
+            group.source.clone_from(&old.source);
         }
     }
 }
