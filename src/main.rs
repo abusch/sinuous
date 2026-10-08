@@ -8,50 +8,16 @@ mod input;
 mod sonos;
 mod view;
 
-use crate::{app::App, sonos::SpeakerState};
-
-#[derive(Debug)]
-pub enum State {
-    Ready(Box<SpeakerState>),
-    Connecting,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    Queue,
-    Favorites,
-}
-
-#[derive(Debug)]
-pub enum Direction {
-    Up,
-    Down,
-}
-
-#[derive(Debug)]
-pub enum Action {
-    Play,
-    Pause,
-    Next,
-    Prev,
-    NextSpeaker,
-    PrevSpeaker,
-    VolAdjust(i16),
-    SwitchView(ViewMode),
-    NavigateFavorites(Direction),
-    PlayFavorite(usize),
-    Nop,
-}
-
-#[derive(Debug)]
-pub enum Update {
-    NewState(Box<SpeakerState>),
-    Nop,
-}
+use crate::app::App;
 
 #[tokio::main]
 async fn main() {
     human_panic::setup_panic!();
+
+    // Pick the crypto provider used to talk to the speakers over TLS.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("a crypto provider is already installed");
 
     let _guard = init_logger();
     info!("Welcome to Sinuous!");

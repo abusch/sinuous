@@ -1,25 +1,33 @@
-use std::{net::Ipv4Addr, str::FromStr};
+use std::{net::Ipv4Addr, str::FromStr, time::Duration};
 
 use anyhow::{Result, anyhow};
 use clap::ArgMatches;
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
-use tokio::{select, sync::mpsc};
+use tokio::{
+    select,
+    time::{self, MissedTickBehavior},
+};
 use tracing::{debug, warn};
 
-use crate::{State, Update, input, sonos, view};
+use crate::{
+    input,
+    sonos::{self, ProvidedDevices},
+    view::{self, UiState},
+};
+
+/// How often to redraw while what is displayed changes over time, e.g. the playback position.
+const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct App {
-    provided_ips: Vec<Ipv4Addr>,
-    provided_names: Vec<String>,
+    devices: ProvidedDevices,
 }
 
 impl App {
     pub fn new(args: ArgMatches) -> Self {
-        // Set two Vectors: One for provided IPs, one for provided device names
-        let mut provided_ips: Vec<Ipv4Addr> = Vec::new();
-        let mut provided_names: Vec<String> = Vec::new();
+        // Provided devices are given either as IPs or as names
+        let mut devices = ProvidedDevices::default();
 
         // Iterate over the provided device argument, if present
         if let Some(provided_device) = args.get_one::<String>("device") {
@@ -27,34 +35,34 @@ impl App {
             for e in provided_device.split(',') {
                 // Try to parse the element into an Ipv4Addr, if not possible accept it as a name
                 if let Ok(ip) = Ipv4Addr::from_str(e) {
-                    provided_ips.push(ip);
+                    devices.ips.push(ip);
                 } else {
-                    provided_names.push(e.to_string());
+                    devices.names.push(e.to_string());
                 }
             }
         }
-        App {
-            provided_ips,
-            provided_names,
-        }
+        App { devices }
     }
 
     pub async fn run(self, terminal: &mut DefaultTerminal) -> Result<()> {
-        let mut state = State::Connecting;
-
-        // Channel used to send SpeakerState updates from SonosService to the UI
-        let (update_tx, mut update_rx) = mpsc::channel(2);
-        // Channel to send commands from the UI to SonosService
-        let (cmd_tx, cmd_rx) = mpsc::channel(2);
-
         // Background service handling all the Sonos stuff
-        let sonos = sonos::SonosService::new(update_tx, cmd_rx);
-        sonos.start((self.provided_ips, self.provided_names));
+        let sonos = sonos::spawn(self.devices);
+        let mut state_rx = sonos.state();
+        // Whether the service is still running, i.e. whether the state may still change.
+        let mut service_running = true;
 
+        let mut ui = UiState::default();
         let mut events = EventStream::new();
+        let mut redraw = time::interval(REDRAW_INTERVAL);
+        redraw.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         debug!("Starting main loop...");
         loop {
+            let state = state_rx.borrow_and_update().clone();
+            ui.sync(&state);
+            terminal.draw(|f| view::render_ui(f, &state, &ui))?;
+            let animated = view::is_animated(&state, &ui);
+
             select! {
                 event = events.try_next() => {
                     let event = event?.ok_or_else(|| anyhow!("Failed to receive keyboard input"))?;
@@ -62,24 +70,19 @@ impl App {
                         if input::should_quit(&event) {
                             break;
                         }
-                        if let State::Ready(ref speaker_state) = state {
-                            let cmd = view::handle_input(&key, speaker_state);
-                            cmd_tx.send(cmd).await?;
+                        if let Some(command) = view::handle_input(&key, &state, &mut ui) {
+                            sonos.send(command);
                         }
                     }
                 }
-                update = update_rx.recv() => match update {
-                    Some(Update::NewState(speaker_state)) => state = State::Ready(speaker_state),
-                    Some(_) => {},
-                    None => {
-                        // channel was closed for some reason...
-                        warn!("Update channel was closed: exiting main loop");
-                        break;
+                _ = redraw.tick(), if animated => {}
+                changed = state_rx.changed(), if service_running => {
+                    if changed.is_err() {
+                        // Keep displaying the last state, e.g. why we failed to connect.
+                        warn!("Sonos service has stopped");
+                        service_running = false;
                     }
                 }
-            }
-            if let State::Ready(ref speaker_state) = state {
-                terminal.draw(|f| view::render_ui(f, speaker_state))?;
             }
         }
 
