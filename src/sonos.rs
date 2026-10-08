@@ -342,7 +342,11 @@ impl Service {
             return;
         }
         debug!("Fetching favorites...");
-        match self.household.connection().get_favorites().await {
+        let favorites = match self.household.connection().await {
+            Ok(conn) => conn.get_favorites().await,
+            Err(err) => Err(err),
+        };
+        match favorites {
             Ok(favorites) => {
                 info!("Found {} favorites", favorites.items.len());
                 self.favorites_version = Some(version);
