@@ -1,12 +1,11 @@
 [package]
 name = "sinuous"
 version = "0.1.6"
-authors = ["Antoine Busch <antoine.busch@gmail.com>"]
 edition = "2024"
 description = "A simple TUI for controlling local Sonos speakers"
-license = "MIT"
-repository = "https://github.com/abusch/sinuous.git"
 homepage = "https://github.com/abusch/sinuous"
+repository = "https://github.com/abusch/sinuous.git"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.57"
@@ -15,19 +14,25 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 futures = "0.3.21"
 human-panic = "2.0.0"
 ratatui = "0.30.0"
-reqwest = { version = "0.13" }
-rustls = { version = "0.23.45", default-features = false, features = ["std", "aws_lc_rs"] }
-serde = "1"
-serde_derive = "1"
-serde_json = "1"
-sinuous-client = { version = "0.1.0", path = "../sonos-ws" }
+rustls = {
+  version = "0.23.45",
+  default-features = false,
+  features = [
+    "aws_lc_rs",
+    "std",
+  ]
+}
+sinuous-client = { path = "../sonos-ws", version = "0.1.0" }
 tokio = { version = "1.18.2", features = ["full"] }
 tracing = "0.1.34"
 tracing-appender = "0.2.2"
-tracing-subscriber = { version = "0.3.11", features = [
-  "env-filter",
-  "tracing-log",
-] }
+tracing-subscriber = {
+  version = "0.3.11",
+  features = [
+    "env-filter",
+    "tracing-log",
+  ]
+}
 
 [profile.release]
 strip = "symbols"
