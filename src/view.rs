@@ -13,7 +13,10 @@ use ratatui::{
     widgets::{Block, BorderType::Rounded, Gauge, List, ListItem, ListState, Paragraph, Tabs},
 };
 
-use crate::{Action, Direction, ViewMode, sonos::SpeakerState};
+use crate::{
+    Action, Direction, ViewMode,
+    sonos::{SpeakerState, TrackInfo},
+};
 
 pub fn render_ui(frame: &mut Frame, state: &SpeakerState) {
     let [title, tabs, playbar, view_tabs, content] = Layout::vertical([
@@ -75,6 +78,7 @@ pub fn handle_input(input: &KeyEvent, state: &SpeakerState) -> Action {
         KeyCode::Char(']') => Action::VolAdjust(2),
 
         // Group switching
+        KeyCode::BackTab => Action::PrevSpeaker,
         KeyCode::Tab => {
             if input.modifiers.contains(KeyModifiers::SHIFT) {
                 Action::PrevSpeaker
@@ -140,23 +144,15 @@ fn render_view_tabs(state: &SpeakerState, frame: &mut Frame, area: Rect) {
 }
 
 fn render_queue(state: &SpeakerState, frame: &mut Frame, area: Rect) {
-    // Select the currently playing track in the queue (if any)
+    // Only the current and next tracks are known: select the current one (if any)
     let mut list_state = ListState::default();
-    let selection = state.now_playing.as_ref().and_then(|track| {
-        state
-            .queue
-            .iter()
-            .position(|t| t.uri() == track.track().uri())
-    });
-    list_state.select(selection);
+    list_state.select(state.now_playing.as_ref().map(|_| 0));
 
-    let items = state.queue.iter().map(|t| {
+    let items = state.now_playing.iter().chain(&state.next_track).map(|t| {
         let s = format!(
-            "{} - {} - {} ({})",
-            t.creator().unwrap_or("Unknown"),
-            t.album().unwrap_or("Unknown"),
-            t.title(),
-            format_duration(t.duration().unwrap_or(0))
+            "{} ({})",
+            format_track(t),
+            format_duration(t.duration_secs.unwrap_or(0))
         );
         ListItem::new(s)
     });
@@ -179,9 +175,10 @@ fn render_queue(state: &SpeakerState, frame: &mut Frame, area: Rect) {
 
 fn render_playbar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     let (np, label, ratio) = if let Some(track) = &state.now_playing {
-        let percent = if track.duration() != 0 {
+        let duration = track.duration_secs.unwrap_or(0);
+        let percent = if duration != 0 {
             f64::clamp(
-                f64::from(track.elapsed()) / f64::from(track.duration()),
+                f64::from(state.elapsed_secs) / f64::from(duration),
                 0.0,
                 1.0,
             )
@@ -190,15 +187,10 @@ fn render_playbar(state: &SpeakerState, frame: &mut Frame, area: Rect) {
         };
         let label = format!(
             "{} / {}",
-            format_duration(track.elapsed()),
-            format_duration(track.duration())
+            format_duration(state.elapsed_secs),
+            format_duration(duration)
         );
-        let title = format!(
-            " {} - {} - {} ",
-            track.track().creator().unwrap_or("Unknown"),
-            track.track().album().unwrap_or("Unknown"),
-            track.track().title()
-        );
+        let title = format!(" {} ", format_track(track));
         (title, label, percent)
     } else {
         (
@@ -242,7 +234,10 @@ fn render_favorites(state: &SpeakerState, frame: &mut Frame, area: Rect) {
     list_state.select(Some(state.selected_favorite));
 
     let items = state.favorites.iter().map(|fav| {
-        let s = format!("{} - {}", fav.title, fav.description);
+        let s = match &fav.description {
+            Some(description) => format!("{} - {}", fav.name, description),
+            None => fav.name.clone(),
+        };
         ListItem::new(s)
     });
 
@@ -255,7 +250,7 @@ fn render_favorites(state: &SpeakerState, frame: &mut Frame, area: Rect) {
         .highlight_symbol("⏵ ")
         .block(
             Block::bordered()
-                .title_top(" Favorite Playlists ")
+                .title_top(" Favorites ")
                 .title_bottom(
                     Line::from(" ↑↓ Navigate • ENTER to play ")
                         .centered()
@@ -265,6 +260,15 @@ fn render_favorites(state: &SpeakerState, frame: &mut Frame, area: Rect) {
         );
 
     frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn format_track(track: &TrackInfo) -> String {
+    format!(
+        "{} - {} - {}",
+        track.artist.as_deref().unwrap_or("Unknown"),
+        track.album.as_deref().unwrap_or("Unknown"),
+        track.title.as_deref().unwrap_or("Unknown"),
+    )
 }
 
 fn format_duration(secs: u32) -> String {

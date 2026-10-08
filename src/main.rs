@@ -36,7 +36,7 @@ pub enum Action {
     Prev,
     NextSpeaker,
     PrevSpeaker,
-    VolAdjust(i16),
+    VolAdjust(i8),
     SwitchView(ViewMode),
     NavigateFavorites(Direction),
     PlayFavorite(usize),
@@ -52,6 +52,11 @@ pub enum Update {
 #[tokio::main]
 async fn main() {
     human_panic::setup_panic!();
+
+    // Pick the crypto provider used to talk to the speakers over TLS.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("a crypto provider is already installed");
 
     let _guard = init_logger();
     info!("Welcome to Sinuous!");
