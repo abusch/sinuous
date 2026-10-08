@@ -8,46 +8,7 @@ mod input;
 mod sonos;
 mod view;
 
-use crate::{app::App, sonos::SpeakerState};
-
-#[derive(Debug)]
-pub enum State {
-    Ready(Box<SpeakerState>),
-    Connecting,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    Queue,
-    Favorites,
-}
-
-#[derive(Debug)]
-pub enum Direction {
-    Up,
-    Down,
-}
-
-#[derive(Debug)]
-pub enum Action {
-    Play,
-    Pause,
-    Next,
-    Prev,
-    NextSpeaker,
-    PrevSpeaker,
-    VolAdjust(i8),
-    SwitchView(ViewMode),
-    NavigateFavorites(Direction),
-    PlayFavorite(usize),
-    Nop,
-}
-
-#[derive(Debug)]
-pub enum Update {
-    NewState(Box<SpeakerState>),
-    Nop,
-}
+use crate::app::App;
 
 #[tokio::main]
 async fn main() {
