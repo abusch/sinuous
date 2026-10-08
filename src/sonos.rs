@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use futures::{StreamExt, future};
+use futures::StreamExt;
 use sinuous_client::{
     Event, EventPayload, FavoriteId, GroupId, Household, PlayerId, Subscription, Topology,
     favorites::Favorite,
@@ -55,6 +55,13 @@ pub struct HouseholdState {
 impl HouseholdState {
     pub fn group(&self, id: &GroupId) -> Option<&GroupState> {
         self.groups.iter().find(|g| &g.id == id)
+    }
+
+    /// The players in `group`, sorted by name.
+    pub fn members(&self, group: &GroupState) -> impl Iterator<Item = &PlayerInfo> {
+        self.players
+            .iter()
+            .filter(|p| group.player_ids.contains(&p.id))
     }
 }
 
@@ -115,10 +122,12 @@ impl GroupState {
     }
 }
 
+/// A player, and its volume once it has reported it.
 #[derive(Debug, Clone)]
 pub struct PlayerInfo {
     pub id: PlayerId,
     pub name: String,
+    pub volume: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -188,11 +197,17 @@ impl From<&Track> for TrackInfo {
     }
 }
 
-/// Something to do with a group.
+/// Something to do with a group or a player.
 #[derive(Debug)]
-pub struct Command {
-    pub group: GroupId,
-    pub action: GroupAction,
+pub enum Command {
+    Group {
+        group: GroupId,
+        action: GroupAction,
+    },
+    Player {
+        player: PlayerId,
+        action: PlayerAction,
+    },
 }
 
 #[derive(Debug)]
@@ -205,6 +220,11 @@ pub enum GroupAction {
     LoadFavorite(FavoriteId),
     /// Make these players the members of the group. The coordinator must come first.
     SetMembers(Vec<PlayerId>),
+}
+
+#[derive(Debug)]
+pub enum PlayerAction {
+    AdjustVolume(i8),
 }
 
 /// The UI's side of the service.
@@ -261,10 +281,10 @@ struct Service {
     state_tx: watch::Sender<HouseholdState>,
     events: broadcast::Receiver<Event>,
     topology_rx: watch::Receiver<Topology>,
-    /// The groups we have subscribed to, or are subscribing to.
-    subscribed: HashSet<GroupId>,
-    /// Subscriptions in progress, with the group they are for.
-    subscriptions: JoinSet<(GroupId, Result<(), sinuous_client::Error>)>,
+    /// The group and player subscriptions made, or in progress.
+    subscribed: HashSet<Subscription>,
+    /// Subscriptions in progress.
+    subscriptions: JoinSet<(Subscription, Result<(), sinuous_client::Error>)>,
     favorites_subscribed: bool,
     /// The version of the favorites in the state.
     favorites_version: Option<String>,
@@ -334,6 +354,16 @@ impl Service {
                 "Playback error: {}",
                 err.reason.unwrap_or(err.error_code)
             )),
+            EventPayload::PlayerVolume(volume) => {
+                let Some(id) = event.player_id else { return };
+                self.state_tx.send_if_modified(|state| {
+                    let Some(player) = state.players.iter_mut().find(|p| p.id == id) else {
+                        return false;
+                    };
+                    player.volume = Some(volume.volume);
+                    true
+                });
+            }
             payload => {
                 let Some(id) = event.group_id else { return };
                 self.state_tx.send_if_modified(|state| {
@@ -379,63 +409,65 @@ impl Service {
     }
 
     /// Update the groups and players from the household's topology, keeping what we know about
-    /// the groups.
+    /// them.
     fn update_groups(&mut self) {
         let (groups, players) = {
             let topology = self.topology_rx.borrow_and_update();
             (group_states(&topology), player_infos(&topology))
         };
-        self.subscribed
-            .retain(|id| groups.iter().any(|group| &group.id == id));
         self.state_tx.send_modify(|state| {
             let old_groups = std::mem::replace(&mut state.groups, groups);
             keep_group_states(&mut state.groups, &old_groups);
-            state.players = players;
+            let old_players = std::mem::replace(&mut state.players, players);
+            keep_player_volumes(&mut state.players, &old_players);
         });
-        self.subscribe_to_groups();
+        self.subscribe_to_members();
     }
 
-    /// Subscribe to the events of the groups we haven't subscribed to yet.
+    /// Subscribe to the events of the groups and players we haven't subscribed to yet, and forget
+    /// the subscriptions of the ones that are gone.
     ///
     /// The subscriptions run in the background: they may need to connect to other speakers.
-    fn subscribe_to_groups(&mut self) {
-        let ids: Vec<_> = self
-            .state_tx
-            .borrow()
-            .groups
-            .iter()
-            .filter(|group| !self.subscribed.contains(&group.id))
-            .map(|group| group.id.clone())
-            .collect();
-        for id in ids {
-            debug!("Subscribing to {id}");
-            self.subscribed.insert(id.clone());
+    fn subscribe_to_members(&mut self) {
+        let wanted: HashSet<_> = {
+            let state = self.state_tx.borrow();
+            let groups = state.groups.iter().flat_map(|group| {
+                [
+                    Subscription::Playback(group.id.clone()),
+                    Subscription::PlaybackMetadata(group.id.clone()),
+                    Subscription::GroupVolume(group.id.clone()),
+                ]
+            });
+            let players = state
+                .players
+                .iter()
+                .map(|player| Subscription::PlayerVolume(player.id.clone()));
+            groups.chain(players).collect()
+        };
+        self.subscribed.retain(|s| wanted.contains(s));
+        for subscription in wanted {
+            if !self.subscribed.insert(subscription.clone()) {
+                continue;
+            }
+            debug!("Subscribing to {subscription:?}");
             let household = self.household.clone();
             self.subscriptions.spawn(async move {
-                let subscriptions = [
-                    Subscription::Playback(id.clone()),
-                    Subscription::PlaybackMetadata(id.clone()),
-                    Subscription::GroupVolume(id.clone()),
-                ];
-                let result =
-                    future::try_join_all(subscriptions.iter().map(|s| household.subscribe(s)))
-                        .await
-                        .map(|_| ());
-                (id, result)
+                let result = household.subscribe(&subscription).await;
+                (subscription, result)
             });
         }
     }
 
     fn subscription_done(
         &mut self,
-        result: Result<(GroupId, Result<(), sinuous_client::Error>), JoinError>,
+        result: Result<(Subscription, Result<(), sinuous_client::Error>), JoinError>,
     ) {
         match result {
             Ok((_, Ok(()))) => {}
-            Ok((id, Err(err))) => {
+            Ok((subscription, Err(err))) => {
                 // Try again later.
-                self.subscribed.remove(&id);
-                self.report_error(format!("Failed to get updates from a group: {err}"));
+                self.subscribed.remove(&subscription);
+                self.report_error(format!("Failed to get updates from a speaker: {err}"));
             }
             Err(err) => error!("Subscription task failed: {err}"),
         }
@@ -449,7 +481,7 @@ impl Service {
     }
 
     async fn retry_subscriptions(&mut self) {
-        self.subscribe_to_groups();
+        self.subscribe_to_members();
         if !self.favorites_subscribed {
             self.subscribe_to_favorites().await;
         }
@@ -460,7 +492,7 @@ impl Service {
     async fn resync(&mut self) {
         debug!("Resyncing");
         self.subscribed.clear();
-        self.subscribe_to_groups();
+        self.subscribe_to_members();
         self.subscribe_to_favorites().await;
     }
 
@@ -493,8 +525,28 @@ async fn run_commands(
 }
 
 async fn run_command(household: &Household, command: &Command) -> Result<()> {
-    let group = household.group(&command.group).await?;
-    match &command.action {
+    match command {
+        Command::Group { group, action } => run_group_command(household, group, action).await,
+        Command::Player { player, action } => {
+            let player = household.player(player).await?;
+            match action {
+                PlayerAction::AdjustVolume(delta) => player
+                    .set_relative_volume(*delta)
+                    .await
+                    .context("Failed to change the volume")?,
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn run_group_command(
+    household: &Household,
+    id: &GroupId,
+    action: &GroupAction,
+) -> Result<()> {
+    let group = household.group(id).await?;
+    match action {
         GroupAction::Play => group.play().await.context("Failed to play")?,
         GroupAction::Pause => group.pause().await.context("Failed to pause")?,
         GroupAction::Next => group
@@ -631,6 +683,7 @@ fn player_infos(topology: &Topology) -> Vec<PlayerInfo> {
         .map(|player| PlayerInfo {
             id: player.id.clone(),
             name: player.name.clone(),
+            volume: None,
         })
         .collect();
     players.sort_by(|a, b| a.name.cmp(&b.name));
@@ -645,6 +698,15 @@ fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
             group.volume = old.volume;
             group.now_playing.clone_from(&old.now_playing);
             group.next_track.clone_from(&old.next_track);
+        }
+    }
+}
+
+/// Copy the volumes of the players in `old_players` to the same players in `players`.
+fn keep_player_volumes(players: &mut [PlayerInfo], old_players: &[PlayerInfo]) {
+    for player in players {
+        if let Some(old) = old_players.iter().find(|old| old.id == player.id) {
+            player.volume = old.volume;
         }
     }
 }

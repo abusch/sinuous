@@ -18,6 +18,7 @@ need to be on the same network (or visible from your current network).
 - <kbd>Space</kbd>: Play / Pause
 - <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
 - <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
+- <kbd>v</kbd>: Adjust the volume of the current group or of each of its speakers
 - <kbd>g</kbd>: Switch to another group
 - <kbd>G</kbd>: Add speakers to / remove speakers from the current group
 - <kbd>1</kbd> / <kbd>2</kbd>: Show the queue / favorites

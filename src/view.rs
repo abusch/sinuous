@@ -23,11 +23,14 @@ use ratatui::{
 use sinuous_client::{GroupId, PlayerId};
 
 use crate::sonos::{
-    Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, TrackInfo,
+    Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
+    TrackInfo,
 };
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
+/// How much the volume changes with each key press.
+const VOLUME_STEP: i8 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ViewMode {
@@ -45,6 +48,9 @@ pub struct UiState {
     /// The group highlighted in the group picker, if it is open.
     group_picker: Option<usize>,
     group_editor: Option<GroupEditor>,
+    /// The row highlighted in the volume mixer, if it is open: 0 for the selected group, then its
+    /// members.
+    volume_mixer: Option<usize>,
 }
 
 /// Speakers being added to or removed from a group.
@@ -87,6 +93,13 @@ impl UiState {
                 .highlighted
                 .min(state.players.len().saturating_sub(1));
         }
+        let mixer_rows = self
+            .current_group(state)
+            .map(|(_, group)| state.members(group).count() + 1);
+        self.volume_mixer = self
+            .volume_mixer
+            .zip(mixer_rows)
+            .map(|(highlighted, rows)| highlighted.min(rows - 1));
     }
 
     /// The selected group and its index.
@@ -171,6 +184,9 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
     }
 
     // Popups, on top of everything else
+    if let Some(highlighted) = ui.volume_mixer {
+        render_volume_mixer(state, group, highlighted, frame);
+    }
     if let Some(highlighted) = ui.group_picker {
         render_group_picker(state, group_index, highlighted, frame);
     }
@@ -188,6 +204,9 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
     }
     if ui.group_editor.is_some() {
         return handle_group_editor_input(input, state, ui);
+    }
+    if let Some(highlighted) = ui.volume_mixer {
+        return handle_volume_mixer_input(input, state, ui, highlighted);
     }
     match input.code {
         // View switching
@@ -207,6 +226,8 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
         // Group switching
         KeyCode::Char('g') => ui.open_group_picker(state),
         KeyCode::Char('G') => ui.open_group_editor(state),
+
+        KeyCode::Char('v') => ui.volume_mixer = Some(0),
 
         _ => return group_command(input, state, ui),
     }
@@ -277,7 +298,7 @@ fn handle_group_editor_input(
             let players = std::iter::once(group.coordinator_id.clone())
                 .chain(others)
                 .collect();
-            return Some(Command {
+            return Some(Command::Group {
                 group: group.id.clone(),
                 action: GroupAction::SetMembers(players),
             });
@@ -286,6 +307,46 @@ fn handle_group_editor_input(
         _ => {}
     }
     None
+}
+
+/// Update `ui` according to the key pressed while the volume mixer is open, with the row at
+/// `highlighted` highlighted, and return the command changing the volume, if any.
+fn handle_volume_mixer_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    highlighted: usize,
+) -> Option<Command> {
+    let (_, group) = ui.current_group(state)?;
+    let delta = match input.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            ui.volume_mixer = Some(highlighted.saturating_sub(1));
+            return None;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if highlighted < state.members(group).count() {
+                ui.volume_mixer = Some(highlighted + 1);
+            }
+            return None;
+        }
+        KeyCode::Esc | KeyCode::Char('v') => {
+            ui.volume_mixer = None;
+            return None;
+        }
+        KeyCode::Left | KeyCode::Char('h' | '[') => -VOLUME_STEP,
+        KeyCode::Right | KeyCode::Char('l' | ']') => VOLUME_STEP,
+        _ => return None,
+    };
+    match highlighted.checked_sub(1) {
+        None => Some(Command::Group {
+            group: group.id.clone(),
+            action: GroupAction::AdjustVolume(delta),
+        }),
+        Some(member) => Some(Command::Player {
+            player: state.members(group).nth(member)?.id.clone(),
+            action: PlayerAction::AdjustVolume(delta),
+        }),
+    }
 }
 
 /// The command for the selected group corresponding to the key pressed, if any.
@@ -308,12 +369,12 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
         }
         KeyCode::Char('n') => GroupAction::Next,
         KeyCode::Char('p') => GroupAction::Previous,
-        KeyCode::Char('[') => GroupAction::AdjustVolume(-2),
-        KeyCode::Char(']') => GroupAction::AdjustVolume(2),
+        KeyCode::Char('[') => GroupAction::AdjustVolume(-VOLUME_STEP),
+        KeyCode::Char(']') => GroupAction::AdjustVolume(VOLUME_STEP),
 
         _ => return None,
     };
-    Some(Command {
+    Some(Command::Group {
         group: group.id.clone(),
         action,
     })
@@ -412,7 +473,7 @@ fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
             Block::bordered()
                 .title_top(" Queue ")
                 .title_bottom(
-                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume • g groups • G edit group ")
+                    Line::from(" SPACE play/pause • n/p next/prev • [ ] volume • v mixer • g groups • G edit group ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
@@ -509,7 +570,7 @@ fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, are
             Block::bordered()
                 .title_top(" Favorites ")
                 .title_bottom(
-                    Line::from(" ↑↓ Navigate • ENTER to play • g groups • G edit group ")
+                    Line::from(" ↑↓ Navigate • ENTER to play • v mixer • g groups • G edit group ")
                         .centered()
                         .style(Style::default().fg(Color::DarkGray)),
                 )
@@ -593,6 +654,57 @@ fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut
     );
 }
 
+/// A popup with the volume of `group` and of each of its members, with the row at `highlighted`
+/// highlighted.
+fn render_volume_mixer(
+    state: &HouseholdState,
+    group: &GroupState,
+    highlighted: usize,
+    frame: &mut Frame,
+) {
+    const BAR_WIDTH: usize = 20;
+
+    let rows: Vec<_> = std::iter::once(("Group", group.volume))
+        .chain(
+            state
+                .members(group)
+                .map(|player| (player.name.as_str(), player.volume)),
+        )
+        .collect();
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| Span::raw(*label).width())
+        .max()
+        .unwrap_or(0);
+
+    let lines = rows
+        .into_iter()
+        .map(|(label, volume)| {
+            let padding = " ".repeat(label_width - Span::raw(label).width() + 2);
+            let filled = volume.map_or(0, |v| usize::from(v.min(100)) * BAR_WIDTH / 100);
+            let volume = volume.map_or_else(|| "--".to_owned(), |v| v.to_string());
+            Line::from(vec![
+                Span::raw(label),
+                Span::raw(padding),
+                Span::styled("█".repeat(filled), Style::default().fg(Color::LightGreen)),
+                Span::styled(
+                    "░".repeat(BAR_WIDTH - filled),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(format!(" {volume:>3}")),
+            ])
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        " Volume ",
+        lines,
+        highlighted,
+        " ↑↓ Navigate • ←→ adjust • ESC close ",
+    );
+}
+
 /// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
 /// highlighted.
 fn render_popup(frame: &mut Frame, title: &str, lines: Vec<Line>, highlighted: usize, help: &str) {
@@ -655,12 +767,13 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::sonos::PlayerInfo;
+    use crate::sonos::{PlayerAction, PlayerInfo};
 
     fn household() -> HouseholdState {
         let player = |id: &str, name: &str| PlayerInfo {
             id: id.into(),
             name: name.to_owned(),
+            volume: Some(20),
         };
         HouseholdState {
             groups: vec![
@@ -715,7 +828,7 @@ mod tests {
             &mut ui,
         );
 
-        let Some(Command {
+        let Some(Command::Group {
             group,
             action: GroupAction::SetMembers(players),
         }) = command
@@ -747,5 +860,44 @@ mod tests {
         assert!(press(&keys, &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
         assert!(ui.group_editor.is_none());
+    }
+
+    #[test]
+    fn volume_mixer_adjusts_group_then_members() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let command = press(&[KeyCode::Char('v'), KeyCode::Left], &state, &mut ui);
+        let Some(Command::Group {
+            group,
+            action: GroupAction::AdjustVolume(delta),
+        }) = command
+        else {
+            panic!("Unexpected command: {command:?}");
+        };
+        assert_eq!(group, GroupId::from("bedroom"));
+        assert_eq!(delta, -VOLUME_STEP);
+
+        // Rows past the last member stay on it: the office
+        let keys = [
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Char(']'),
+        ];
+        let command = press(&keys, &state, &mut ui);
+        let Some(Command::Player {
+            player,
+            action: PlayerAction::AdjustVolume(delta),
+        }) = command
+        else {
+            panic!("Unexpected command: {command:?}");
+        };
+        assert_eq!(player, PlayerId::from("o"));
+        assert_eq!(delta, VOLUME_STEP);
+
+        assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
+        assert!(ui.volume_mixer.is_none());
     }
 }
