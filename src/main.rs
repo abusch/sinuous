@@ -1,18 +1,22 @@
-use clap::{arg, command};
+use std::path::PathBuf;
+
+use anyhow::Result;
+use clap::{arg, command, value_parser};
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 mod app;
 mod artwork;
+mod config;
 mod input;
 mod sonos;
 mod view;
 
-use crate::app::App;
+use crate::{app::App, config::Config};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     human_panic::setup_panic!();
 
     // Pick the crypto provider used to talk to the speakers over TLS.
@@ -30,10 +34,22 @@ async fn main() {
                 -d --device <device> "Specify a speaker to connect to. Provide either an Ipv4 Address or a name to search for. Multiple values are possible by seperating them with a comma"
             )
             .required(false)
+            .value_delimiter(',')
+        )
+        .arg(
+            arg!(-c --config <path> "Read the configuration from this file instead of the default location")
+                .required(false)
+                .value_parser(value_parser!(PathBuf))
         )
         .get_matches();
 
-    let app = App::new(args);
+    let mut config = Config::load(args.get_one::<PathBuf>("config").map(PathBuf::as_path))?;
+    // The command line overrides the configuration file.
+    if let Some(devices) = args.get_many::<String>("device") {
+        config.core.devices = devices.cloned().collect();
+    }
+
+    let app = App::new(config);
     // Initialize the terminal user interface.
     let mut terminal = ratatui::init();
 
@@ -43,6 +59,7 @@ async fn main() {
         info!("Bye!");
     }
     ratatui::restore();
+    Ok(())
 }
 
 fn init_logger() -> WorkerGuard {

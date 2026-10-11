@@ -37,7 +37,7 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Commands sent while this many are still waiting to run are dropped.
 const COMMAND_QUEUE_SIZE: usize = 16;
 
-/// The speakers to connect to, as given on the command line.
+/// The speakers to connect to, as given on the command line or in the configuration file.
 #[derive(Debug, Default)]
 pub struct ProvidedDevices {
     pub ips: Vec<Ipv4Addr>,

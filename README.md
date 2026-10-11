@@ -37,6 +37,24 @@ already have one, then simply run `cargo run`.
 To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be
 found in `/tmp/sinuous.log`.
 
+## Configuration
+
+Sinuous reads its settings from `~/.config/sinuous/config.toml` (or
+`$XDG_CONFIG_HOME/sinuous/config.toml`, or `%APPDATA%\sinuous\config.toml` on
+Windows), if it exists. Use `--config <path>` to read another file instead.
+All settings are optional:
+
+```toml
+[core]
+# The speakers to connect to, as IPv4 addresses or names. Speakers are
+# discovered via SSDP if not set. `--device` overrides this.
+devices = ["192.168.1.10", "Living Room"]
+
+[ui]
+# Whether to show the album art of the current track.
+album_art = true
+```
+
 ## Screenshot
 
 ![screenshot](assets/screenshot.png)
