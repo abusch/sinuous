@@ -30,11 +30,16 @@ pub struct CoreConfig {
 pub struct UiConfig {
     /// Whether to show the album art of the current track.
     pub album_art: bool,
+    /// Whether to show icons instead of labels, for terminals using a Nerd Font.
+    pub nerd_font: bool,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { album_art: true }
+        Self {
+            album_art: true,
+            nerd_font: false,
+        }
     }
 }
 
@@ -85,6 +90,7 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.core.devices.is_empty());
         assert!(config.ui.album_art);
+        assert!(!config.ui.nerd_font);
     }
 
     #[test]
@@ -96,11 +102,13 @@ mod tests {
 
             [ui]
             album_art = false
+            nerd_font = true
             "#,
         )
         .unwrap();
         assert_eq!(config.core.devices, ["192.168.1.10", "Living Room"]);
         assert!(!config.ui.album_art);
+        assert!(config.ui.nerd_font);
     }
 
     #[test]

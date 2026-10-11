@@ -53,6 +53,9 @@ devices = ["192.168.1.10", "Living Room"]
 [ui]
 # Whether to show the album art of the current track.
 album_art = true
+# Whether to show icons instead of labels for actions and play modes. Requires
+# a Nerd Font (https://www.nerdfonts.com).
+nerd_font = false
 ```
 
 ## Screenshot

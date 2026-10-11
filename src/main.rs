@@ -11,6 +11,7 @@ mod artwork;
 mod config;
 mod input;
 mod sonos;
+mod symbols;
 mod view;
 
 use crate::{app::App, config::Config};

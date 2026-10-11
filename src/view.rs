@@ -7,11 +7,7 @@ use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{
-        Constraint,
-        HorizontalAlignment::{Center, Right},
-        Layout, Rect,
-    },
+    layout::{Constraint, HorizontalAlignment::Right, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -31,6 +27,7 @@ use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
     Source, TrackInfo,
 };
+use crate::symbols::Symbols;
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
@@ -157,7 +154,13 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     showing_error || advancing
 }
 
-pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState, artwork: &mut Artwork) {
+pub fn render_ui(
+    frame: &mut Frame,
+    state: &HouseholdState,
+    ui: &UiState,
+    artwork: &mut Artwork,
+    symbols: &Symbols,
+) {
     match &state.status {
         ConnectionStatus::Connecting => {
             return render_message(frame, "Connecting to your Sonos speakers...");
@@ -176,9 +179,16 @@ pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState, artwor
     let [title, now_playing] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    render_title_bar(state, group, frame, title);
+    render_title_bar(state, group, symbols, frame, title);
     // Images can be drawn on top of the text, so hide the album art behind popups.
-    render_now_playing(group, frame, now_playing, artwork, !ui.popup_open());
+    render_now_playing(
+        group,
+        symbols,
+        frame,
+        now_playing,
+        artwork,
+        !ui.popup_open(),
+    );
 
     // Popups, on top of everything else
     if let Some(highlighted) = ui.favorites_picker {
@@ -485,7 +495,13 @@ fn render_message(frame: &mut Frame, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Frame, area: Rect) {
+fn render_title_bar(
+    state: &HouseholdState,
+    group: &GroupState,
+    symbols: &Symbols,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let [title_area, volume_area] =
         Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(area);
 
@@ -510,8 +526,8 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
     frame.render_widget(title, title_area);
 
     let vol_text = match group.volume {
-        Some(volume) => format!("🔊: {volume:2} "),
-        None => "🔊: -- ".to_owned(),
+        Some(volume) => format!("{} {volume:2} ", symbols.volume_level),
+        None => format!("{} -- ", symbols.volume_level),
     };
     let vol = Paragraph::new(vol_text).alignment(Right);
     frame.render_widget(vol, volume_area);
@@ -520,12 +536,13 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
 /// The track playing on `group`, how far into it playback is, and the next track.
 fn render_now_playing(
     group: &GroupState,
+    symbols: &Symbols,
     frame: &mut Frame,
     area: Rect,
     artwork: &mut Artwork,
     draw_art: bool,
 ) {
-    // Everything but the album art: source, track information, progress, play modes and next
+    // Everything but the album art: source, track information, progress, controls and next
     // track, with the gaps between them.
     const DETAILS_HEIGHT: u16 = 12;
     const MAX_ART_HEIGHT: u16 = 16;
@@ -534,7 +551,7 @@ fn render_now_playing(
     let block = Block::bordered()
         .border_type(Rounded)
         .title_top(" Now playing ")
-        .title_bottom(help_line(group));
+        .title_bottom(help_line(symbols));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -558,7 +575,7 @@ fn render_now_playing(
         info_area,
         _,
         progress_area,
-        modes_area,
+        controls_area,
         _,
         next_area,
         _,
@@ -622,8 +639,8 @@ fn render_now_playing(
         progress_area.centered_horizontally(Constraint::Percentage(80)),
     );
     frame.render_widget(
-        Paragraph::new(play_modes_line(group)).centered(),
-        modes_area,
+        Paragraph::new(controls_line(group, symbols)).centered(),
+        controls_area,
     );
 
     // Next track
@@ -687,27 +704,46 @@ fn album_line(track: &TrackInfo) -> Line<'_> {
     Line::from(spans)
 }
 
-/// The play modes, with the keys toggling them, highlighting the ones that are on.
-fn play_modes_line(group: &GroupState) -> Line<'static> {
+/// The playback controls and play modes, with the keys for them, highlighting the playback status
+/// and the play modes that are on.
+fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
+    let is_playing = group.playback.is_some_and(|p| p.is_playing);
+    let status = if is_playing {
+        symbols.playing
+    } else {
+        symbols.paused
+    };
+    let controls = [
+        ("p", symbols.previous, false, Action::Previous),
+        ("SPACE", status, is_playing, Action::PlayPause),
+        ("n", symbols.next, false, Action::Next),
+    ];
+
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     let repeat = if modes.repeat_one {
-        "repeat one"
+        symbols.repeat_one
     } else {
-        "repeat"
+        symbols.repeat
     };
     let modes = [
-        ("s", "shuffle", modes.shuffle, Action::Shuffle),
+        ("s", symbols.shuffle, modes.shuffle, Action::Shuffle),
         (
             "r",
             repeat,
             modes.repeat || modes.repeat_one,
             Action::Repeat,
         ),
-        ("c", "crossfade", modes.crossfade, Action::Crossfade),
+        ("c", symbols.crossfade, modes.crossfade, Action::Crossfade),
     ];
+
     let mut spans = Vec::new();
-    for (i, (key, label, on, action)) in modes.into_iter().enumerate() {
-        if i > 0 {
+    for (i, (key, label, on, action)) in controls.into_iter().chain(modes).enumerate() {
+        if i == controls.len() {
+            spans.push(Span::styled(
+                "   │   ",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else if i > 0 {
             spans.push(Span::raw("   "));
         }
         let supported = supports(group, action);
@@ -730,37 +766,32 @@ fn play_modes_line(group: &GroupState) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The keys to press for each action, greying out the ones the current source doesn't support.
-fn help_line(group: &GroupState) -> Line<'static> {
+/// The keys to press for the other actions.
+fn help_line(symbols: &Symbols) -> Line<'static> {
     let entries = [
-        ("SPACE", "play/pause", supports(group, Action::PlayPause)),
-        ("n", "next", supports(group, Action::Next)),
-        ("p", "prev", supports(group, Action::Previous)),
-        ("[ ]", "volume", true),
-        ("v", "mixer", true),
-        ("f", "favorites", true),
-        ("g", "groups", true),
-        ("G", "edit group", true),
+        ("[ ]", symbols.volume),
+        ("v", symbols.mixer),
+        ("f", symbols.favorites),
+        ("g", symbols.groups),
+        ("G", symbols.edit_group),
     ];
     let separator = Style::default().fg(Color::DarkGray);
     let mut spans = vec![Span::raw(" ")];
-    for (i, (key, label, supported)) in entries.into_iter().enumerate() {
+    for (i, (key, label)) in entries.into_iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" • ", separator));
         }
-        let (key_style, label_style) = if supported {
-            (Style::default(), Style::default().fg(Color::Gray))
-        } else {
-            (UNSUPPORTED, UNSUPPORTED)
-        };
-        spans.push(Span::styled(key, key_style));
-        spans.push(Span::styled(format!(" {label}"), label_style));
+        spans.push(Span::raw(key));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(Color::Gray),
+        ));
     }
     spans.push(Span::raw(" "));
     Line::from(spans).centered()
 }
 
-/// The playback status of `group`, and a bar showing how far into the current track it is.
+/// A bar showing how far into the current track `group` is, between the elapsed and total times.
 fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
     let playback = group.playback;
     let duration = group
@@ -786,33 +817,33 @@ fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
         0.0
     };
 
-    let [symbol_area, bar_area] =
-        Layout::horizontal([Constraint::Length(3), Constraint::Min(1)]).areas(area);
-
-    let is_playing = playback.is_some_and(|p| p.is_playing);
-    let media_symbol = if is_playing { "⏵" } else { "⏸" };
-    let symbol = Paragraph::new(media_symbol).alignment(Center);
+    let elapsed = Span::raw(format_duration(elapsed));
+    let duration = Span::raw(format_duration(duration));
+    let width = |span: &Span| u16::try_from(span.width()).unwrap_or(u16::MAX);
+    let [elapsed_area, bar_area, duration_area] = Layout::horizontal([
+        Constraint::Length(width(&elapsed)),
+        Constraint::Min(1),
+        Constraint::Length(width(&duration)),
+    ])
+    .spacing(1)
+    .areas(area);
 
     let bar = Gauge::default()
         .use_unicode(true)
-        .gauge_style(
-            Style::default()
-                .fg(Color::LightGreen)
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        )
-        .label(format!(
-            "{} / {}",
-            format_duration(elapsed),
-            format_duration(duration)
-        ))
+        .gauge_style(Style::default().fg(Color::LightGreen).bg(Color::DarkGray))
+        // Without a label, the gauge shows the percentage.
+        .label("")
         .ratio(ratio);
 
     frame.render_widget(
-        symbol,
-        symbol_area.centered_vertically(Constraint::Length(1)),
+        Paragraph::new(elapsed),
+        elapsed_area.centered_vertically(Constraint::Length(1)),
     );
     frame.render_widget(bar, bar_area);
+    frame.render_widget(
+        Paragraph::new(duration),
+        duration_area.centered_vertically(Constraint::Length(1)),
+    );
 }
 
 /// A popup listing the favorites, with the one at `highlighted` highlighted.

@@ -16,6 +16,7 @@ use crate::{
     config::{Config, UiConfig},
     input,
     sonos::{self, ProvidedDevices},
+    symbols::Symbols,
     view::{self, UiState},
 };
 
@@ -60,6 +61,7 @@ impl App {
         };
         let (mut artwork, mut loaded_rx) = Artwork::new(picker);
 
+        let symbols = Symbols::choose(self.ui_config.nerd_font);
         let mut ui = UiState::default();
         let mut events = EventStream::new();
         let mut redraw = time::interval(REDRAW_INTERVAL);
@@ -70,7 +72,7 @@ impl App {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
             artwork.show(view::artwork_url(&state, &ui).filter(|_| self.ui_config.album_art));
-            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork))?;
+            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork, symbols))?;
             let animated = view::is_animated(&state, &ui);
 
             select! {
