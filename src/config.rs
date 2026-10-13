@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use etcetera::BaseStrategy;
 use serde::Deserialize;
+use toml_edit::{DocumentMut, Item, Table};
 use tracing::{debug, warn};
 
 #[derive(Debug, Default, Deserialize)]
@@ -43,6 +44,49 @@ impl Default for UiConfig {
     }
 }
 
+impl UiConfig {
+    pub fn get(&self, setting: UiSetting) -> bool {
+        match setting {
+            UiSetting::AlbumArt => self.album_art,
+            UiSetting::NerdFont => self.nerd_font,
+        }
+    }
+
+    pub fn set(&mut self, setting: UiSetting, value: bool) {
+        match setting {
+            UiSetting::AlbumArt => self.album_art = value,
+            UiSetting::NerdFont => self.nerd_font = value,
+        }
+    }
+}
+
+/// The settings of [`UiConfig`] that can be changed while running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiSetting {
+    AlbumArt,
+    NerdFont,
+}
+
+impl UiSetting {
+    pub const ALL: [Self; 2] = [Self::AlbumArt, Self::NerdFont];
+
+    /// Its name in the configuration file.
+    fn key(self) -> &'static str {
+        match self {
+            Self::AlbumArt => "album_art",
+            Self::NerdFont => "nerd_font",
+        }
+    }
+
+    /// What it is shown as in the configuration dialog.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::AlbumArt => "Show album art",
+            Self::NerdFont => "Show icons (requires a Nerd Font)",
+        }
+    }
+}
+
 impl Config {
     /// Read the configuration file at `path`, or at [`default_path`] if `None`.
     ///
@@ -72,6 +116,50 @@ impl Config {
         toml::from_str(&contents)
             .with_context(|| format!("Invalid configuration in {}", path.display()))
     }
+}
+
+/// Set `setting` to `value` in the configuration file at `path`, creating it if needed, and keeping
+/// everything else in it as is, comments included.
+pub fn save(path: &Path, setting: UiSetting, value: bool) -> Result<()> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
+    };
+    let mut document: DocumentMut = contents
+        .parse()
+        .with_context(|| format!("Invalid configuration in {}", path.display()))?;
+    set_in(&mut document, setting, value)
+        .with_context(|| format!("Invalid configuration in {}", path.display()))?;
+
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    }
+    fs::write(path, document.to_string())
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
+
+/// Set `setting` to `value` in the `[ui]` table of `document`.
+fn set_in(document: &mut DocumentMut, setting: UiSetting, value: bool) -> Result<()> {
+    let ui = document
+        .entry("ui")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .context("`ui` isn't a table")?;
+    match ui.get_mut(setting.key()) {
+        // Replace the value only, to keep the comments around the key.
+        Some(item) => {
+            let decor = item.as_value().map(|v| v.decor().clone());
+            *item = toml_edit::value(value);
+            if let (Some(decor), Some(value)) = (decor, item.as_value_mut()) {
+                *value.decor_mut() = decor;
+            }
+        }
+        None => {
+            ui.insert(setting.key(), toml_edit::value(value));
+        }
+    }
+    Ok(())
 }
 
 /// Where the configuration file is looked for: `$XDG_CONFIG_HOME/sinuous/config.toml`, i.e.
@@ -109,6 +197,29 @@ mod tests {
         assert_eq!(config.core.devices, ["192.168.1.10", "Living Room"]);
         assert!(!config.ui.album_art);
         assert!(config.ui.nerd_font);
+    }
+
+    #[test]
+    fn sets_setting_keeping_the_rest() {
+        let mut document: DocumentMut =
+            "# My speakers\n[core]\ndevices = [\"Kitchen\"]\n\n[ui]\n# Pretty\nnerd_font = true\n"
+                .parse()
+                .unwrap();
+        set_in(&mut document, UiSetting::AlbumArt, false).unwrap();
+        set_in(&mut document, UiSetting::NerdFont, false).unwrap();
+        assert_eq!(
+            document.to_string(),
+            "# My speakers\n[core]\ndevices = [\"Kitchen\"]\n\n[ui]\n# Pretty\nnerd_font = false\nalbum_art = false\n"
+        );
+    }
+
+    #[test]
+    fn sets_setting_in_empty_file() {
+        let mut document = DocumentMut::new();
+        set_in(&mut document, UiSetting::AlbumArt, false).unwrap();
+        assert_eq!(document.to_string(), "[ui]\nalbum_art = false\n");
+        let config: Config = toml::from_str(&document.to_string()).unwrap();
+        assert!(!config.ui.album_art);
     }
 
     #[test]

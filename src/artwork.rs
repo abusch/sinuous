@@ -50,6 +50,14 @@ impl Artwork {
         (artwork, loaded_rx)
     }
 
+    /// Draw images with `picker` from now on.
+    pub fn set_picker(&mut self, picker: Picker) {
+        self.picker = picker;
+        // Prepare the image shown, if any, for the new picker.
+        let wanted = self.wanted.take();
+        self.show(wanted.as_ref());
+    }
+
     /// Show the image at `url`, fetching it unless it was loaded recently.
     pub fn show(&mut self, url: Option<&Url>) {
         if self.wanted.as_ref() == url {

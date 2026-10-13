@@ -1,6 +1,6 @@
-use std::{net::Ipv4Addr, str::FromStr, time::Duration};
+use std::{net::Ipv4Addr, path::PathBuf, str::FromStr, time::Duration};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
@@ -13,11 +13,10 @@ use tracing::{debug, warn};
 
 use crate::{
     artwork::Artwork,
-    config::{Config, UiConfig},
+    config::{self, Config, UiConfig, UiSetting},
     input,
     sonos::{self, ProvidedDevices},
-    symbols::Symbols,
-    view::{self, UiState},
+    view::{self, Request, UiState},
 };
 
 /// How often to redraw while what is displayed changes over time, e.g. the playback position.
@@ -26,10 +25,12 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 pub struct App {
     devices: ProvidedDevices,
     ui_config: UiConfig,
+    /// Where settings changed while running are saved, if known.
+    config_path: Option<PathBuf>,
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, config_path: Option<PathBuf>) -> Self {
         // Provided devices are given either as IPs or as names
         let mut devices = ProvidedDevices::default();
         for device in config.core.devices {
@@ -42,26 +43,27 @@ impl App {
         App {
             devices,
             ui_config: config.ui,
+            config_path,
         }
     }
 
-    pub async fn run(self, terminal: &mut DefaultTerminal) -> Result<()> {
+    pub async fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         // Background service handling all the Sonos stuff
-        let sonos = sonos::spawn(self.devices);
+        let sonos = sonos::spawn(std::mem::take(&mut self.devices));
         let mut state_rx = sonos.state();
         // Whether the service is still running, i.e. whether the state may still change.
         let mut service_running = true;
 
-        // Before reading key presses (see `query_picker`). Album art is never shown when disabled,
-        // so don't bother querying the terminal then.
-        let picker = if self.ui_config.album_art {
+        // Before reading key presses (see `query_picker`). Album art is hidden when disabled, so
+        // don't bother querying the terminal until it is enabled.
+        let mut picker_queried = self.ui_config.album_art;
+        let picker = if picker_queried {
             query_picker()
         } else {
             Picker::halfblocks()
         };
         let (mut artwork, mut loaded_rx) = Artwork::new(picker);
 
-        let symbols = Symbols::choose(self.ui_config.nerd_font);
         let mut ui = UiState::default();
         let mut events = EventStream::new();
         let mut redraw = time::interval(REDRAW_INTERVAL);
@@ -72,8 +74,19 @@ impl App {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
             artwork.show(view::artwork_url(&state, &ui).filter(|_| self.ui_config.album_art));
-            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork, symbols))?;
+            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork, &self.ui_config))?;
             let animated = view::is_animated(&state, &ui);
+
+            if self.ui_config.album_art && !picker_queried {
+                // Album art was just enabled (and is hidden behind the configuration dialog). Stop
+                // reading key presses while querying the terminal: the stream only reads them while
+                // waiting for one, so it isn't now that it has delivered the key press enabling
+                // album art.
+                drop(events);
+                artwork.set_picker(query_picker());
+                events = EventStream::new();
+                picker_queried = true;
+            }
 
             select! {
                 event = events.try_next() => {
@@ -82,8 +95,10 @@ impl App {
                         if input::should_quit(&event) {
                             break;
                         }
-                        if let Some(command) = view::handle_input(&key, &state, &mut ui) {
-                            sonos.send(command);
+                        match view::handle_input(&key, &state, &mut ui) {
+                            Some(Request::Speakers(command)) => sonos.send(command),
+                            Some(Request::Toggle(setting)) => self.toggle(setting, &mut ui),
+                            None => {}
                         }
                     }
                 }
@@ -101,11 +116,27 @@ impl App {
 
         Ok(())
     }
+
+    /// Turn `setting` on or off, and save it to the configuration file.
+    fn toggle(&mut self, setting: UiSetting, ui: &mut UiState) {
+        let value = !self.ui_config.get(setting);
+        self.ui_config.set(setting, value);
+        let saved = self
+            .config_path
+            .as_deref()
+            .context("Failed to find the home directory")
+            .and_then(|path| config::save(path, setting, value));
+        if let Err(err) = saved {
+            warn!("Failed to save the configuration: {err:#}");
+            ui.show_error(format!("Failed to save the configuration: {err:#}"));
+        }
+    }
 }
 
 /// Find out how to draw images in the terminal.
 ///
-/// This must be called before reading key presses, as it reads the terminal's answers to queries.
+/// This must be called while not reading key presses, as it reads the terminal's answers to
+/// queries.
 fn query_picker() -> Picker {
     // Terminals that don't answer the queries delay startup, and the first key pressed may
     // be lost: ratatui-image keeps waiting for an answer in the background.

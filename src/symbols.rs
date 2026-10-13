@@ -21,11 +21,14 @@ pub struct Symbols {
     // Actions
     pub next: &'static str,
     pub previous: &'static str,
-    pub volume: &'static str,
-    pub mixer: &'static str,
-    pub favorites: &'static str,
-    pub groups: &'static str,
-    pub edit_group: &'static str,
+    // In the header
+    pub help: &'static str,
+    pub config: &'static str,
+    pub quit: &'static str,
+
+    // Settings in the configuration dialog
+    pub checked: &'static str,
+    pub unchecked: &'static str,
 }
 
 impl Symbols {
@@ -42,11 +45,11 @@ impl Symbols {
         crossfade: "crossfade",
         next: "next",
         previous: "prev",
-        volume: "volume",
-        mixer: "mixer",
-        favorites: "favorites",
-        groups: "groups",
-        edit_group: "edit group",
+        help: "help",
+        config: "config",
+        quit: "quit",
+        checked: "[x]",
+        unchecked: "[ ]",
     };
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
@@ -63,11 +66,11 @@ impl Symbols {
         crossfade: "\u{f0915}",     // nf-md-transition
         next: "\u{f04ad}",          // nf-md-skip_next
         previous: "\u{f04ae}",      // nf-md-skip_previous
-        volume: "\u{f057e}",        // nf-md-volume_high
-        mixer: "\u{f066a}",         // nf-md-tune_vertical
-        favorites: "\u{f02d1}",     // nf-md-heart
-        groups: "\u{f04c3}",        // nf-md-speaker
-        edit_group: "\u{f0d38}",    // nf-md-speaker_multiple
+        help: "\u{f02d7}",          // nf-md-help_circle
+        config: "\u{f0493}",        // nf-md-cog
+        quit: "\u{f0206}",          // nf-md-exit_to_app
+        checked: "\u{f0132}",       // nf-md-checkbox_marked
+        unchecked: "\u{f0131}",     // nf-md-checkbox_blank_outline
     };
 
     /// The volume level `volume` is shown as.

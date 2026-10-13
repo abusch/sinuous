@@ -24,6 +24,7 @@ use tui_slider::{Slider, style::SliderStyle};
 use url::Url;
 
 use crate::artwork::Artwork;
+use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
     Source, TrackInfo,
@@ -49,6 +50,21 @@ pub struct UiState {
     /// The row highlighted in the volume mixer, if it is open: 0 for the selected group, then its
     /// members.
     volume_mixer: Option<usize>,
+    /// Whether the keyboard shortcuts are shown.
+    help: bool,
+    /// The setting highlighted in the configuration dialog, if it is open.
+    config_dialog: Option<usize>,
+    /// The last error that wasn't about the speakers.
+    error: Option<ErrorMessage>,
+}
+
+/// What a key press asks for, besides changing what is shown.
+#[derive(Debug)]
+pub enum Request {
+    /// Send a command to the speakers.
+    Speakers(Command),
+    /// Turn a setting on or off, and save it.
+    Toggle(UiSetting),
 }
 
 /// Speakers being added to or removed from a group.
@@ -105,6 +121,22 @@ impl UiState {
             || self.group_editor.is_some()
             || self.volume_mixer.is_some()
             || self.favorites_picker.is_some()
+            || self.help
+            || self.config_dialog.is_some()
+    }
+
+    /// Show `message` in the header for a while.
+    pub fn show_error(&mut self, message: String) {
+        self.error = Some(ErrorMessage::new(message));
+    }
+
+    /// The error to show in the header, if any: the most recent one, if it is recent enough.
+    fn shown_error<'a>(&'a self, state: &'a HouseholdState) -> Option<&'a ErrorMessage> {
+        [state.last_error.as_ref(), self.error.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|err| is_shown(err))
+            .max_by_key(|err| err.at)
     }
 
     /// The selected group and its index.
@@ -147,7 +179,7 @@ pub fn artwork_url<'a>(state: &'a HouseholdState, ui: &UiState) -> Option<&'a Ur
 /// Whether what is displayed changes over time, and so needs redrawing even when the state doesn't
 /// change.
 pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
-    let showing_error = state.last_error.as_ref().is_some_and(is_shown);
+    let showing_error = ui.shown_error(state).is_some();
     let advancing = ui
         .current_group(state)
         .and_then(|(_, group)| group.playback)
@@ -160,8 +192,9 @@ pub fn render_ui(
     state: &HouseholdState,
     ui: &UiState,
     artwork: &mut Artwork,
-    symbols: &Symbols,
+    settings: &UiConfig,
 ) {
+    let symbols = Symbols::choose(settings.nerd_font);
     match &state.status {
         ConnectionStatus::Connecting => {
             return render_message(frame, "Connecting to your Sonos speakers...");
@@ -180,7 +213,7 @@ pub fn render_ui(
     let [title, now_playing] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    render_title_bar(state, group, frame, title);
+    render_title_bar(state, ui, group, symbols, frame, title);
     // Images can be drawn on top of the text, so hide the album art behind popups.
     render_now_playing(
         group,
@@ -204,11 +237,36 @@ pub fn render_ui(
     if let Some(editor) = &ui.group_editor {
         render_group_editor(state, editor, frame);
     }
+    if let Some(highlighted) = ui.config_dialog {
+        render_config_dialog(settings, symbols, highlighted, frame);
+    }
+    if ui.help {
+        render_help(frame);
+    }
 }
 
-/// Update `ui` according to the key pressed, and return the command to send to the speakers, if
-/// any.
-pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) -> Option<Command> {
+/// Update `ui` according to the key pressed, and return what else it asks for, if anything.
+pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) -> Option<Request> {
+    if ui.help {
+        if matches!(input.code, KeyCode::Esc | KeyCode::Char('?' | 'h')) {
+            ui.help = false;
+        }
+        return None;
+    }
+    if let Some(highlighted) = ui.config_dialog {
+        return handle_config_dialog_input(input, ui, highlighted);
+    }
+    let command = handle_command_input(input, state, ui)?;
+    Some(Request::Speakers(command))
+}
+
+/// Update `ui` according to the key pressed outside of the help and the configuration dialog, and
+/// return the command to send to the speakers, if any.
+fn handle_command_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+) -> Option<Command> {
     if let Some(highlighted) = ui.group_picker {
         handle_group_picker_input(input, state, ui, highlighted);
         return None;
@@ -231,7 +289,36 @@ pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) 
 
         KeyCode::Char('v') => ui.volume_mixer = Some(0),
 
+        KeyCode::Char('?' | 'h') => ui.help = true,
+        KeyCode::Char(',') => ui.config_dialog = Some(0),
+
         _ => return group_command(input, state, ui),
+    }
+    None
+}
+
+/// Update `ui` according to the key pressed while the configuration dialog is open, with the
+/// setting at `highlighted` highlighted, and return the setting to toggle, if any.
+fn handle_config_dialog_input(
+    input: &KeyEvent,
+    ui: &mut UiState,
+    highlighted: usize,
+) -> Option<Request> {
+    match input.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            ui.config_dialog = Some(highlighted.saturating_sub(1));
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            ui.config_dialog = Some((highlighted + 1).min(UiSetting::ALL.len() - 1));
+        }
+        KeyCode::Char(' ') | KeyCode::Enter => {
+            return UiSetting::ALL
+                .get(highlighted)
+                .copied()
+                .map(Request::Toggle);
+        }
+        KeyCode::Esc | KeyCode::Char(',') => ui.config_dialog = None,
+        _ => {}
     }
     None
 }
@@ -496,7 +583,22 @@ fn render_message(frame: &mut Frame, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Frame, area: Rect) {
+/// The name of the app and of the current group, or the latest error, and the main shortcuts.
+fn render_title_bar(
+    state: &HouseholdState,
+    ui: &UiState,
+    group: &GroupState,
+    symbols: &Symbols,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let shortcuts = shortcuts_line(symbols);
+    let shortcuts_width = u16::try_from(shortcuts.width()).unwrap_or(u16::MAX);
+    let [title_area, shortcuts_area] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(shortcuts_width)])
+            .spacing(1)
+            .areas(area);
+
     let mut header = vec![Span::styled(
         format!("Sinuous {}", crate_version!()),
         Style::default()
@@ -504,7 +606,7 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
             .bg(Color::DarkGray)
             .add_modifier(Modifier::BOLD),
     )];
-    match state.last_error.as_ref().filter(|err| is_shown(err)) {
+    match ui.shown_error(state) {
         Some(err) => header.push(Span::styled(
             format!(" -- {}", err.message),
             Style::default().fg(Color::Red),
@@ -515,7 +617,30 @@ fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Fram
         }
     }
     let title = Paragraph::new(Line::from(header));
-    frame.render_widget(title, area);
+    frame.render_widget(title, title_area);
+    frame.render_widget(shortcuts, shortcuts_area);
+}
+
+/// The keys to press for the help, the configuration dialog and quitting.
+fn shortcuts_line(symbols: &Symbols) -> Line<'static> {
+    let entries = [
+        ("?", symbols.help),
+        (",", symbols.config),
+        ("q", symbols.quit),
+    ];
+    let separator = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    for (i, (key, label)) in entries.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" • ", separator));
+        }
+        spans.push(Span::raw(key));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(Color::Gray),
+        ));
+    }
+    Line::from(spans)
 }
 
 /// The track playing on `group`, how far into it playback is, its volume, and the next track.
@@ -532,18 +657,12 @@ fn render_now_playing(
     const DETAILS_HEIGHT: u16 = 13;
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
-
-    let block = Block::bordered()
-        .border_type(Rounded)
-        .title_top(" Now playing ")
-        .title_bottom(help_line(symbols));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    const MIN_VOLUME_WIDTH: u16 = 44;
 
     // Make room for the art even before it is loaded, so that the rest doesn't move when it is.
     // Keep a gap below it, and at least one empty line above and below everything.
     let art_height = if artwork.is_wanted() {
-        let height = inner
+        let height = area
             .height
             .saturating_sub(DETAILS_HEIGHT + 3)
             .min(MAX_ART_HEIGHT);
@@ -584,7 +703,7 @@ fn render_now_playing(
         Constraint::Length(1),
         Constraint::Fill(1),
     ])
-    .areas(inner);
+    .areas(area);
 
     if draw_art
         && art_height > 0
@@ -627,15 +746,18 @@ fn render_now_playing(
     };
     frame.render_widget(Paragraph::new(info).centered(), info_area);
 
-    // The volume slider lines up with the controls above it, and the progress bar with the slider.
+    // The volume slider lines up with the controls above it, unless they are too narrow (with
+    // icons), and the progress bar with the slider.
     let controls = controls_line(group, symbols);
-    let controls_width = u16::try_from(controls.width()).unwrap_or(u16::MAX);
+    let volume_width = u16::try_from(controls.width())
+        .unwrap_or(u16::MAX)
+        .max(MIN_VOLUME_WIDTH);
     frame.render_widget(Paragraph::new(controls).centered(), controls_area);
     let slider_area = render_volume(
         group,
         symbols,
         frame,
-        volume_area.centered_horizontally(Constraint::Length(controls_width)),
+        volume_area.centered_horizontally(Constraint::Length(volume_width)),
     );
     render_progress(
         group,
@@ -708,8 +830,8 @@ fn album_line(track: &TrackInfo) -> Line<'_> {
     Line::from(spans)
 }
 
-/// The playback controls and play modes, with the keys for them, highlighting the playback status
-/// and the play modes that are on.
+/// The playback controls and play modes, highlighting the playback status and the play modes that
+/// are on.
 fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = if is_playing {
@@ -718,9 +840,9 @@ fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
         symbols.paused
     };
     let controls = [
-        ("p", symbols.previous, false, Action::Previous),
-        ("SPACE", status, is_playing, Action::PlayPause),
-        ("n", symbols.next, false, Action::Next),
+        (symbols.previous, false, Action::Previous),
+        (status, is_playing, Action::PlayPause),
+        (symbols.next, false, Action::Next),
     ];
 
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
@@ -730,18 +852,13 @@ fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
         symbols.repeat
     };
     let modes = [
-        ("s", symbols.shuffle, modes.shuffle, Action::Shuffle),
-        (
-            "r",
-            repeat,
-            modes.repeat || modes.repeat_one,
-            Action::Repeat,
-        ),
-        ("c", symbols.crossfade, modes.crossfade, Action::Crossfade),
+        (symbols.shuffle, modes.shuffle, Action::Shuffle),
+        (repeat, modes.repeat || modes.repeat_one, Action::Repeat),
+        (symbols.crossfade, modes.crossfade, Action::Crossfade),
     ];
 
     let mut spans = Vec::new();
-    for (i, (key, label, on, action)) in controls.into_iter().chain(modes).enumerate() {
+    for (i, (label, on, action)) in controls.into_iter().chain(modes).enumerate() {
         if i == controls.len() {
             spans.push(Span::styled(
                 "   │   ",
@@ -750,49 +867,16 @@ fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
         } else if i > 0 {
             spans.push(Span::raw("   "));
         }
-        let supported = supports(group, action);
-        let (key_style, label_style) = match (supported, on) {
-            (false, _) => (UNSUPPORTED, UNSUPPORTED),
-            (true, true) => (
-                Style::default().fg(Color::Gray),
-                Style::default()
-                    .fg(Color::LightGreen)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            (true, false) => (
-                Style::default().fg(Color::Gray),
-                Style::default().fg(Color::Gray),
-            ),
+        let style = match (supports(group, action), on) {
+            (false, _) => UNSUPPORTED,
+            (true, true) => Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+            (true, false) => Style::default().fg(Color::Gray),
         };
-        spans.push(Span::styled(format!("{key} "), key_style));
-        spans.push(Span::styled(label, label_style));
+        spans.push(Span::styled(label, style));
     }
     Line::from(spans)
-}
-
-/// The keys to press for the other actions.
-fn help_line(symbols: &Symbols) -> Line<'static> {
-    let entries = [
-        ("[ ]", symbols.volume),
-        ("v", symbols.mixer),
-        ("f", symbols.favorites),
-        ("g", symbols.groups),
-        ("G", symbols.edit_group),
-    ];
-    let separator = Style::default().fg(Color::DarkGray);
-    let mut spans = vec![Span::raw(" ")];
-    for (i, (key, label)) in entries.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" • ", separator));
-        }
-        spans.push(Span::raw(key));
-        spans.push(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(Color::Gray),
-        ));
-    }
-    spans.push(Span::raw(" "));
-    Line::from(spans).centered()
 }
 
 /// A bar showing how far into the current track `group` is in `bar_area`, between the elapsed and
@@ -1044,6 +1128,97 @@ fn render_volume_mixer(
     }
 }
 
+/// A popup listing all the keyboard shortcuts.
+fn render_help(frame: &mut Frame) {
+    // The keys to use in the other popups are shown at their bottom.
+    const SECTIONS: [(&str, &[(&str, &str)]); 2] = [
+        (
+            "Playback",
+            &[
+                ("SPACE", "Play / pause"),
+                ("p / n", "Previous / next track"),
+                ("s", "Toggle shuffle"),
+                ("r", "Cycle repeat: all, one, off"),
+                ("c", "Toggle crossfade"),
+                ("[ / ]", "Volume down / up"),
+            ],
+        ),
+        (
+            "General",
+            &[
+                ("v", "Volume of the group and of each speaker"),
+                ("f", "Play a favorite"),
+                ("g", "Switch to another group"),
+                ("G", "Add or remove speakers from the group"),
+                (",", "Configuration"),
+                ("? / h", "This help"),
+                ("q", "Quit"),
+            ],
+        ),
+    ];
+
+    let key_width = SECTIONS
+        .iter()
+        .flat_map(|(_, shortcuts)| shortcuts.iter())
+        .map(|(key, _)| Span::raw(*key).width())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    for (title, shortcuts) in SECTIONS {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::styled(
+            title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for (key, description) in shortcuts {
+            let padding = " ".repeat(key_width - Span::raw(*key).width() + 2);
+            lines.push(Line::from(vec![
+                Span::raw(*key),
+                Span::raw(padding),
+                Span::styled(*description, Style::default().fg(Color::Gray)),
+            ]));
+        }
+    }
+
+    render_popup(frame, " Keyboard shortcuts ", lines, None, " ESC close ");
+}
+
+/// A popup listing the settings, with the one at `highlighted` highlighted.
+fn render_config_dialog(
+    settings: &UiConfig,
+    symbols: &Symbols,
+    highlighted: usize,
+    frame: &mut Frame,
+) {
+    let lines = UiSetting::ALL
+        .into_iter()
+        .map(|setting| {
+            let (checkbox, style) = if settings.get(setting) {
+                (symbols.checked, Style::default().fg(Color::LightGreen))
+            } else {
+                (symbols.unchecked, Style::default().fg(Color::Gray))
+            };
+            Line::from(vec![
+                Span::styled(checkbox, style),
+                Span::raw(" "),
+                Span::raw(setting.description()),
+            ])
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        " Configuration ",
+        lines,
+        Some(highlighted),
+        " ↑↓ Navigate • SPACE toggle • ESC close ",
+    );
+}
+
 /// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
 /// highlighted, if any.
 ///
@@ -1144,7 +1319,7 @@ mod tests {
         }
     }
 
-    fn press(keys: &[KeyCode], state: &HouseholdState, ui: &mut UiState) -> Option<Command> {
+    fn press(keys: &[KeyCode], state: &HouseholdState, ui: &mut UiState) -> Option<Request> {
         keys.iter().fold(None, |_, code| {
             handle_input(&KeyEvent::new(*code, KeyModifiers::NONE), state, ui)
         })
@@ -1173,10 +1348,10 @@ mod tests {
             &mut ui,
         );
 
-        let Some(Command::Group {
+        let Some(Request::Speakers(Command::Group {
             group,
             action: GroupAction::SetMembers(players),
-        }) = command
+        })) = command
         else {
             panic!("Unexpected command: {command:?}");
         };
@@ -1214,10 +1389,10 @@ mod tests {
         ui.sync(&state);
 
         let command = press(&[KeyCode::Char('v'), KeyCode::Left], &state, &mut ui);
-        let Some(Command::Group {
+        let Some(Request::Speakers(Command::Group {
             group,
             action: GroupAction::AdjustVolume(delta),
-        }) = command
+        })) = command
         else {
             panic!("Unexpected command: {command:?}");
         };
@@ -1232,10 +1407,10 @@ mod tests {
             KeyCode::Char(']'),
         ];
         let command = press(&keys, &state, &mut ui);
-        let Some(Command::Player {
+        let Some(Request::Speakers(Command::Player {
             player,
             action: PlayerAction::AdjustVolume(delta),
-        }) = command
+        })) = command
         else {
             panic!("Unexpected command: {command:?}");
         };
@@ -1289,5 +1464,38 @@ mod tests {
             repeat_cycle(actions),
             [(false, true), (false, false), (false, true)]
         );
+    }
+
+    #[test]
+    fn config_dialog_toggles_highlighted_setting() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let request = press(
+            &[KeyCode::Char(','), KeyCode::Char('j'), KeyCode::Char(' ')],
+            &state,
+            &mut ui,
+        );
+        assert!(matches!(
+            request,
+            Some(Request::Toggle(UiSetting::NerdFont))
+        ));
+        // Keys don't reach the main screen while it is open.
+        assert!(press(&[KeyCode::Char('c')], &state, &mut ui).is_none());
+        assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
+        assert!(ui.config_dialog.is_none());
+    }
+
+    #[test]
+    fn help_closes_with_the_keys_opening_it() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        assert!(press(&[KeyCode::Char('?'), KeyCode::Char(' ')], &state, &mut ui).is_none());
+        assert!(ui.help);
+        press(&[KeyCode::Char('h')], &state, &mut ui);
+        assert!(!ui.help);
     }
 }

@@ -44,13 +44,14 @@ async fn main() -> Result<()> {
         )
         .get_matches();
 
-    let mut config = Config::load(args.get_one::<PathBuf>("config").map(PathBuf::as_path))?;
+    let config_path = args.get_one::<PathBuf>("config").cloned();
+    let mut config = Config::load(config_path.as_deref())?;
     // The command line overrides the configuration file.
     if let Some(devices) = args.get_many::<String>("device") {
         config.core.devices = devices.cloned().collect();
     }
 
-    let app = App::new(config);
+    let app = App::new(config, config_path.or_else(config::default_path));
     // Initialize the terminal user interface.
     let mut terminal = ratatui::init();
 

@@ -84,7 +84,7 @@ pub struct ErrorMessage {
 }
 
 impl ErrorMessage {
-    fn new(message: String) -> Self {
+    pub fn new(message: String) -> Self {
         Self {
             message,
             at: Instant::now(),
