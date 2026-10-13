@@ -22,6 +22,8 @@ pub struct Symbols {
     pub next: &'static str,
     pub previous: &'static str,
     // In the header
+    /// Shown before the name of the current group.
+    pub playing_on: &'static str,
     pub help: &'static str,
     pub config: &'static str,
     pub quit: &'static str,
@@ -29,6 +31,7 @@ pub struct Symbols {
     // Settings in the configuration dialog
     pub checked: &'static str,
     pub unchecked: &'static str,
+    pub theme: &'static str,
 }
 
 impl Symbols {
@@ -45,11 +48,13 @@ impl Symbols {
         crossfade: "crossfade",
         next: "next",
         previous: "prev",
+        playing_on: "Playing on",
         help: "help",
         config: "config",
         quit: "quit",
         checked: "[x]",
         unchecked: "[ ]",
+        theme: "🎨",
     };
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
@@ -66,11 +71,13 @@ impl Symbols {
         crossfade: "\u{f0915}",     // nf-md-transition
         next: "\u{f04ad}",          // nf-md-skip_next
         previous: "\u{f04ae}",      // nf-md-skip_previous
+        playing_on: "\u{f04c3}",    // nf-md-speaker
         help: "\u{f02d7}",          // nf-md-help_circle
         config: "\u{f0493}",        // nf-md-cog
         quit: "\u{f0206}",          // nf-md-exit_to_app
         checked: "\u{f0132}",       // nf-md-checkbox_marked
         unchecked: "\u{f0131}",     // nf-md-checkbox_blank_outline
+        theme: "\u{f03d8}",         // nf-md-palette
     };
 
     /// The volume level `volume` is shown as.

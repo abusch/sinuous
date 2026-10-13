@@ -59,6 +59,18 @@ album_art = true
 # Whether to show icons instead of labels for actions and play modes. Requires
 # a Nerd Font (https://www.nerdfonts.com).
 nerd_font = false
+# The colours to use: "terminal" for the terminal's own, or one of the themes of
+# opaline (https://github.com/hyperb1iss/opaline#-builtin-themes): ayu-dark,
+# ayu-light, ayu-mirage, catppuccin-frappe, catppuccin-latte,
+# catppuccin-macchiato, catppuccin-mocha, dracula, everforest-dark,
+# everforest-light, flexoki-dark, flexoki-light, github-dark-dimmed,
+# github-light, gruvbox-dark, gruvbox-light, kanagawa-dragon, kanagawa-lotus,
+# kanagawa-wave, light-owl, monokai-pro, night-owl, nord, one-dark, one-light,
+# palenight, rose-pine, rose-pine-dawn, rose-pine-moon, silkcircuit-dawn,
+# silkcircuit-glow, silkcircuit-neon, silkcircuit-soft, silkcircuit-vibrant,
+# solarized-dark, solarized-light, tokyo-night, tokyo-night-moon,
+# tokyo-night-storm.
+theme = "terminal"
 ```
 
 ## Screenshot

@@ -8,8 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use etcetera::BaseStrategy;
 use serde::Deserialize;
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, Table, Value};
 use tracing::{debug, warn};
+
+use crate::theme;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,6 +35,8 @@ pub struct UiConfig {
     pub album_art: bool,
     /// Whether to show icons instead of labels, for terminals using a Nerd Font.
     pub nerd_font: bool,
+    /// The colours to use: the terminal's, or those of one of the themes in [`crate::theme`].
+    pub theme: String,
 }
 
 impl Default for UiConfig {
@@ -40,6 +44,7 @@ impl Default for UiConfig {
         Self {
             album_art: true,
             nerd_font: false,
+            theme: theme::TERMINAL.to_owned(),
         }
     }
 }
@@ -60,7 +65,7 @@ impl UiConfig {
     }
 }
 
-/// The settings of [`UiConfig`] that can be changed while running.
+/// The settings of [`UiConfig`] that can be toggled while running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiSetting {
     AlbumArt,
@@ -71,7 +76,7 @@ impl UiSetting {
     pub const ALL: [Self; 2] = [Self::AlbumArt, Self::NerdFont];
 
     /// Its name in the configuration file.
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::AlbumArt => "album_art",
             Self::NerdFont => "nerd_font",
@@ -118,9 +123,9 @@ impl Config {
     }
 }
 
-/// Set `setting` to `value` in the configuration file at `path`, creating it if needed, and keeping
-/// everything else in it as is, comments included.
-pub fn save(path: &Path, setting: UiSetting, value: bool) -> Result<()> {
+/// Set the `key` setting of the `[ui]` table to `value` in the configuration file at `path`,
+/// creating it if needed, and keeping everything else in it as is, comments included.
+pub fn save(path: &Path, key: &str, value: impl Into<Value>) -> Result<()> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
@@ -129,7 +134,7 @@ pub fn save(path: &Path, setting: UiSetting, value: bool) -> Result<()> {
     let mut document: DocumentMut = contents
         .parse()
         .with_context(|| format!("Invalid configuration in {}", path.display()))?;
-    set_in(&mut document, setting, value)
+    set_in(&mut document, key, value.into())
         .with_context(|| format!("Invalid configuration in {}", path.display()))?;
 
     if let Some(dir) = path.parent() {
@@ -139,24 +144,24 @@ pub fn save(path: &Path, setting: UiSetting, value: bool) -> Result<()> {
         .with_context(|| format!("Failed to write {}", path.display()))
 }
 
-/// Set `setting` to `value` in the `[ui]` table of `document`.
-fn set_in(document: &mut DocumentMut, setting: UiSetting, value: bool) -> Result<()> {
+/// Set the `key` setting to `value` in the `[ui]` table of `document`.
+fn set_in(document: &mut DocumentMut, key: &str, value: Value) -> Result<()> {
     let ui = document
         .entry("ui")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_like_mut()
         .context("`ui` isn't a table")?;
-    match ui.get_mut(setting.key()) {
+    match ui.get_mut(key) {
         // Replace the value only, to keep the comments around the key.
         Some(item) => {
             let decor = item.as_value().map(|v| v.decor().clone());
-            *item = toml_edit::value(value);
+            *item = Item::Value(value);
             if let (Some(decor), Some(value)) = (decor, item.as_value_mut()) {
                 *value.decor_mut() = decor;
             }
         }
         None => {
-            ui.insert(setting.key(), toml_edit::value(value));
+            ui.insert(key, Item::Value(value));
         }
     }
     Ok(())
@@ -179,6 +184,7 @@ mod tests {
         assert!(config.core.devices.is_empty());
         assert!(config.ui.album_art);
         assert!(!config.ui.nerd_font);
+        assert_eq!(config.ui.theme, theme::TERMINAL);
     }
 
     #[test]
@@ -191,12 +197,14 @@ mod tests {
             [ui]
             album_art = false
             nerd_font = true
+            theme = "nord"
             "#,
         )
         .unwrap();
         assert_eq!(config.core.devices, ["192.168.1.10", "Living Room"]);
         assert!(!config.ui.album_art);
         assert!(config.ui.nerd_font);
+        assert_eq!(config.ui.theme, "nord");
     }
 
     #[test]
@@ -205,8 +213,8 @@ mod tests {
             "# My speakers\n[core]\ndevices = [\"Kitchen\"]\n\n[ui]\n# Pretty\nnerd_font = true\n"
                 .parse()
                 .unwrap();
-        set_in(&mut document, UiSetting::AlbumArt, false).unwrap();
-        set_in(&mut document, UiSetting::NerdFont, false).unwrap();
+        set_in(&mut document, UiSetting::AlbumArt.key(), false.into()).unwrap();
+        set_in(&mut document, UiSetting::NerdFont.key(), false.into()).unwrap();
         assert_eq!(
             document.to_string(),
             "# My speakers\n[core]\ndevices = [\"Kitchen\"]\n\n[ui]\n# Pretty\nnerd_font = false\nalbum_art = false\n"
@@ -216,7 +224,7 @@ mod tests {
     #[test]
     fn sets_setting_in_empty_file() {
         let mut document = DocumentMut::new();
-        set_in(&mut document, UiSetting::AlbumArt, false).unwrap();
+        set_in(&mut document, UiSetting::AlbumArt.key(), false.into()).unwrap();
         assert_eq!(document.to_string(), "[ui]\nalbum_art = false\n");
         let config: Config = toml::from_str(&document.to_string()).unwrap();
         assert!(!config.ui.album_art);

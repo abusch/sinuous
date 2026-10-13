@@ -7,8 +7,8 @@ use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType::Rounded, Clear, Gauge, HighlightSpacing, List, ListState, Padding,
@@ -30,11 +30,10 @@ use crate::sonos::{
     Source, TrackInfo,
 };
 use crate::symbols::Symbols;
+use crate::theme::{self, THEMES, Theme};
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
-/// The style of actions the current source doesn't support.
-const UNSUPPORTED: Style = Style::new().fg(Color::DarkGray);
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 2;
 
@@ -52,8 +51,11 @@ pub struct UiState {
     volume_mixer: Option<usize>,
     /// Whether the keyboard shortcuts are shown.
     help: bool,
-    /// The setting highlighted in the configuration dialog, if it is open.
+    /// The setting highlighted in the configuration dialog, if it is open: one of
+    /// [`UiSetting::ALL`], or the theme after them.
     config_dialog: Option<usize>,
+    /// The theme highlighted in the theme picker, if it is open, as an index in [`THEMES`].
+    theme_picker: Option<usize>,
     /// The last error that wasn't about the speakers.
     error: Option<ErrorMessage>,
 }
@@ -65,6 +67,8 @@ pub enum Request {
     Speakers(Command),
     /// Turn a setting on or off, and save it.
     Toggle(UiSetting),
+    /// Use the theme with this name, and save it.
+    SetTheme(String),
 }
 
 /// Speakers being added to or removed from a group.
@@ -123,6 +127,13 @@ impl UiState {
             || self.favorites_picker.is_some()
             || self.help
             || self.config_dialog.is_some()
+            || self.theme_picker.is_some()
+    }
+
+    /// The name of the theme to show instead of the configured one, while choosing one.
+    pub fn previewed_theme(&self) -> Option<&'static str> {
+        let entry = THEMES.get(self.theme_picker?)?;
+        Some(&entry.name)
     }
 
     /// Show `message` in the header for a while.
@@ -193,31 +204,35 @@ pub fn render_ui(
     ui: &UiState,
     artwork: &mut Artwork,
     settings: &UiConfig,
+    theme: &Theme,
 ) {
     let symbols = Symbols::choose(settings.nerd_font);
+    frame.render_widget(Block::new().style(theme.base()), frame.area());
     match &state.status {
         ConnectionStatus::Connecting => {
-            return render_message(frame, "Connecting to your Sonos speakers...");
+            return render_message(frame, theme, "Connecting to your Sonos speakers...");
         }
         ConnectionStatus::Failed(err) => {
             return render_message(
                 frame,
+                theme,
                 &format!("Failed to connect to your Sonos speakers: {err}\n\nPress q to quit."),
             );
         }
         ConnectionStatus::Connected => {}
     }
     let Some((group_index, group)) = ui.current_group(state) else {
-        return render_message(frame, "No speakers found.\n\nPress q to quit.");
+        return render_message(frame, theme, "No speakers found.\n\nPress q to quit.");
     };
     let [title, now_playing] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    render_title_bar(state, ui, group, symbols, frame, title);
+    render_title_bar(state, ui, group, symbols, theme, frame, title);
     // Images can be drawn on top of the text, so hide the album art behind popups.
     render_now_playing(
         group,
         symbols,
+        theme,
         frame,
         now_playing,
         artwork,
@@ -226,35 +241,46 @@ pub fn render_ui(
 
     // Popups, on top of everything else
     if let Some(highlighted) = ui.favorites_picker {
-        render_favorites_picker(state, highlighted, frame);
+        render_favorites_picker(state, theme, highlighted, frame);
     }
     if let Some(highlighted) = ui.volume_mixer {
-        render_volume_mixer(state, group, highlighted, frame);
+        render_volume_mixer(state, group, theme, highlighted, frame);
     }
     if let Some(highlighted) = ui.group_picker {
-        render_group_picker(state, group_index, highlighted, frame);
+        render_group_picker(state, theme, group_index, highlighted, frame);
     }
     if let Some(editor) = &ui.group_editor {
-        render_group_editor(state, editor, frame);
+        render_group_editor(state, theme, editor, frame);
     }
     if let Some(highlighted) = ui.config_dialog {
-        render_config_dialog(settings, symbols, highlighted, frame);
+        render_config_dialog(settings, symbols, theme, highlighted, frame);
+    }
+    if let Some(highlighted) = ui.theme_picker {
+        render_theme_picker(&settings.theme, theme, highlighted, frame);
     }
     if ui.help {
-        render_help(frame);
+        render_help(theme, frame);
     }
 }
 
 /// Update `ui` according to the key pressed, and return what else it asks for, if anything.
-pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) -> Option<Request> {
+pub fn handle_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    settings: &UiConfig,
+    ui: &mut UiState,
+) -> Option<Request> {
     if ui.help {
         if matches!(input.code, KeyCode::Esc | KeyCode::Char('?' | 'h')) {
             ui.help = false;
         }
         return None;
     }
+    if let Some(highlighted) = ui.theme_picker {
+        return handle_theme_picker_input(input, ui, highlighted);
+    }
     if let Some(highlighted) = ui.config_dialog {
-        return handle_config_dialog_input(input, ui, highlighted);
+        return handle_config_dialog_input(input, settings, ui, highlighted);
     }
     let command = handle_command_input(input, state, ui)?;
     Some(Request::Speakers(command))
@@ -301,23 +327,55 @@ fn handle_command_input(
 /// setting at `highlighted` highlighted, and return the setting to toggle, if any.
 fn handle_config_dialog_input(
     input: &KeyEvent,
+    settings: &UiConfig,
     ui: &mut UiState,
     highlighted: usize,
 ) -> Option<Request> {
+    // The settings that can be toggled, then the theme
+    let rows = UiSetting::ALL.len() + 1;
     match input.code {
         KeyCode::Up | KeyCode::Char('k') => {
             ui.config_dialog = Some(highlighted.saturating_sub(1));
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            ui.config_dialog = Some((highlighted + 1).min(UiSetting::ALL.len() - 1));
+            ui.config_dialog = Some((highlighted + 1).min(rows - 1));
         }
-        KeyCode::Char(' ') | KeyCode::Enter => {
-            return UiSetting::ALL
-                .get(highlighted)
-                .copied()
-                .map(Request::Toggle);
-        }
+        KeyCode::Char(' ') | KeyCode::Enter => match UiSetting::ALL.get(highlighted) {
+            Some(setting) => return Some(Request::Toggle(*setting)),
+            None => {
+                let current = THEMES
+                    .iter()
+                    .position(|entry| entry.name == settings.theme)
+                    .unwrap_or(0);
+                ui.theme_picker = Some(current);
+            }
+        },
         KeyCode::Esc | KeyCode::Char(',') => ui.config_dialog = None,
+        _ => {}
+    }
+    None
+}
+
+/// Update `ui` according to the key pressed while the theme picker is open, with the theme at
+/// `highlighted` highlighted, and return the theme chosen, if any.
+fn handle_theme_picker_input(
+    input: &KeyEvent,
+    ui: &mut UiState,
+    highlighted: usize,
+) -> Option<Request> {
+    match input.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            ui.theme_picker = Some(highlighted.saturating_sub(1));
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            ui.theme_picker = Some((highlighted + 1).min(THEMES.len() - 1));
+        }
+        KeyCode::Enter => {
+            ui.theme_picker = None;
+            let entry = THEMES.get(highlighted)?;
+            return Some(Request::SetTheme(entry.name.clone()));
+        }
+        KeyCode::Esc => ui.theme_picker = None,
         _ => {}
     }
     None
@@ -565,7 +623,7 @@ fn next_repeat(modes: PlayModes, actions: PlaybackActions) -> PlayModesUpdate {
 }
 
 /// Display a message in place of the main UI.
-fn render_message(frame: &mut Frame, message: &str) {
+fn render_message(frame: &mut Frame, theme: &Theme, message: &str) {
     let [_, area, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(6),
@@ -578,6 +636,7 @@ fn render_message(frame: &mut Frame, message: &str) {
         .block(
             Block::bordered()
                 .border_type(Rounded)
+                .border_style(Style::new().fg(theme.border))
                 .title(format!(" Sinuous {} ", crate_version!())),
         );
     frame.render_widget(paragraph, area);
@@ -589,46 +648,56 @@ fn render_title_bar(
     ui: &UiState,
     group: &GroupState,
     symbols: &Symbols,
+    theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let shortcuts = shortcuts_line(symbols);
+    // Muted text would be hard to read on the background of the header.
+    let separator = Style::default().fg(theme.secondary);
+    let shortcuts = shortcuts_line(symbols, theme);
     let shortcuts_width = u16::try_from(shortcuts.width()).unwrap_or(u16::MAX);
     let [title_area, shortcuts_area] =
         Layout::horizontal([Constraint::Min(1), Constraint::Length(shortcuts_width)])
             .spacing(1)
-            .areas(area);
+            .areas(area.inner(Margin::new(1, 0)));
 
-    let mut header = vec![Span::styled(
-        format!("Sinuous {}", crate_version!()),
-        Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    )];
+    let mut header = vec![
+        Span::styled(
+            format!("Sinuous {}", crate_version!()),
+            Style::default()
+                .fg(theme.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" │ ", separator),
+    ];
     match ui.shown_error(state) {
         Some(err) => header.push(Span::styled(
-            format!(" -- {}", err.message),
-            Style::default().fg(Color::Red),
+            err.message.as_str(),
+            Style::default().fg(theme.error),
         )),
         None => {
-            header.push(Span::styled(" -- Playing on ", Style::default()));
-            header.push(Span::styled(&group.name, Style::default().fg(Color::Green)));
+            header.push(Span::raw(format!("{} ", symbols.playing_on)));
+            header.push(Span::styled(&group.name, Style::default().fg(theme.name)));
         }
     }
-    let title = Paragraph::new(Line::from(header));
-    frame.render_widget(title, title_area);
+
+    frame.render_widget(
+        Block::new().style(Style::default().bg(theme.title_background)),
+        area,
+    );
+    frame.render_widget(Line::from(header), title_area);
     frame.render_widget(shortcuts, shortcuts_area);
 }
 
 /// The keys to press for the help, the configuration dialog and quitting.
-fn shortcuts_line(symbols: &Symbols) -> Line<'static> {
+fn shortcuts_line(symbols: &Symbols, theme: &Theme) -> Line<'static> {
     let entries = [
         ("?", symbols.help),
         (",", symbols.config),
         ("q", symbols.quit),
     ];
-    let separator = Style::default().fg(Color::DarkGray);
+    // Muted text would be hard to read on the background of the header.
+    let separator = Style::default().fg(theme.secondary);
     let mut spans = Vec::new();
     for (i, (key, label)) in entries.into_iter().enumerate() {
         if i > 0 {
@@ -637,7 +706,7 @@ fn shortcuts_line(symbols: &Symbols) -> Line<'static> {
         spans.push(Span::raw(key));
         spans.push(Span::styled(
             format!(" {label}"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(theme.secondary),
         ));
     }
     Line::from(spans)
@@ -647,6 +716,7 @@ fn shortcuts_line(symbols: &Symbols) -> Line<'static> {
 fn render_now_playing(
     group: &GroupState,
     symbols: &Symbols,
+    theme: &Theme,
     frame: &mut Frame,
     area: Rect,
     artwork: &mut Artwork,
@@ -723,7 +793,10 @@ fn render_now_playing(
     }
 
     if let Some(source) = &group.source {
-        frame.render_widget(Paragraph::new(source_line(source)).centered(), source_area);
+        frame.render_widget(
+            Paragraph::new(source_line(source, theme)).centered(),
+            source_area,
+        );
     }
 
     // Track information
@@ -735,20 +808,20 @@ fn render_now_playing(
             ),
             Line::styled(
                 track.artist.as_deref().unwrap_or("Unknown artist"),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.artist),
             ),
-            album_line(track),
+            album_line(track, theme),
         ],
         None => vec![
             Line::default(),
-            Line::styled("Nothing playing", Style::default().fg(Color::DarkGray)),
+            Line::styled("Nothing playing", Style::default().fg(theme.muted)),
         ],
     };
     frame.render_widget(Paragraph::new(info).centered(), info_area);
 
     // The volume slider lines up with the controls above it, unless they are too narrow (with
     // icons), and the progress bar with the slider.
-    let controls = controls_line(group, symbols);
+    let controls = controls_line(group, symbols, theme);
     let volume_width = u16::try_from(controls.width())
         .unwrap_or(u16::MAX)
         .max(MIN_VOLUME_WIDTH);
@@ -756,11 +829,13 @@ fn render_now_playing(
     let slider_area = render_volume(
         group,
         symbols,
+        theme,
         frame,
         volume_area.centered_horizontally(Constraint::Length(volume_width)),
     );
     render_progress(
         group,
+        theme,
         frame,
         progress_area,
         Rect {
@@ -771,14 +846,14 @@ fn render_now_playing(
 
     // Next track
     if let Some(next) = &group.next_track {
-        let dim = Style::default().fg(Color::DarkGray);
+        let dim = Style::default().fg(theme.muted);
         let next = Line::from(vec![
             Span::styled("Next: ", dim),
             Span::raw(next.title.as_deref().unwrap_or("Unknown title")),
             Span::styled(" by ", dim),
             Span::styled(
                 next.artist.as_deref().unwrap_or("Unknown artist"),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.artist),
             ),
         ]);
         frame.render_widget(Paragraph::new(next).centered(), next_area);
@@ -786,7 +861,7 @@ fn render_now_playing(
 }
 
 /// Where the music comes from, e.g. `Spotify · Album · Altered State`.
-fn source_line(source: &Source) -> Line<'_> {
+fn source_line<'a>(source: &'a Source, theme: &Theme) -> Line<'a> {
     let kind = source.kind.as_deref().and_then(|kind| match kind {
         "album" => Some("Album"),
         "artist" => Some("Artist"),
@@ -800,10 +875,10 @@ fn source_line(source: &Source) -> Line<'_> {
     let mut spans = Vec::new();
     for (i, part) in parts.into_iter().flatten().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" · ", Style::default().fg(theme.muted)));
         }
         let style = if i == 0 {
-            Style::default().fg(Color::Green)
+            Style::default().fg(theme.name)
         } else {
             Style::default()
         };
@@ -813,26 +888,23 @@ fn source_line(source: &Source) -> Line<'_> {
 }
 
 /// The album of `track`, with a badge if it is explicit.
-fn album_line(track: &TrackInfo) -> Line<'_> {
+fn album_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
     let mut spans = vec![Span::styled(
         track.album.as_deref().unwrap_or("Unknown album"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.muted)
             .add_modifier(Modifier::ITALIC),
     )];
     if track.album_explicit {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            " E ",
-            Style::default().fg(Color::Black).bg(Color::Gray),
-        ));
+        spans.push(Span::styled(" E ", theme.badge));
     }
     Line::from(spans)
 }
 
 /// The playback controls and play modes, highlighting the playback status and the play modes that
 /// are on.
-fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
+fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = if is_playing {
         symbols.playing
@@ -860,19 +932,14 @@ fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
     let mut spans = Vec::new();
     for (i, (label, on, action)) in controls.into_iter().chain(modes).enumerate() {
         if i == controls.len() {
-            spans.push(Span::styled(
-                "   │   ",
-                Style::default().fg(Color::DarkGray),
-            ));
+            spans.push(Span::styled("   │   ", Style::default().fg(theme.muted)));
         } else if i > 0 {
             spans.push(Span::raw("   "));
         }
         let style = match (supports(group, action), on) {
-            (false, _) => UNSUPPORTED,
-            (true, true) => Style::default()
-                .fg(Color::LightGreen)
-                .add_modifier(Modifier::BOLD),
-            (true, false) => Style::default().fg(Color::Gray),
+            (false, _) => Style::default().fg(theme.muted),
+            (true, true) => Style::default().fg(theme.on).add_modifier(Modifier::BOLD),
+            (true, false) => Style::default().fg(theme.secondary),
         };
         spans.push(Span::styled(label, style));
     }
@@ -881,7 +948,13 @@ fn controls_line(group: &GroupState, symbols: &Symbols) -> Line<'static> {
 
 /// A bar showing how far into the current track `group` is in `bar_area`, between the elapsed and
 /// total times, in the rest of `area`.
-fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect, bar_area: Rect) {
+fn render_progress(
+    group: &GroupState,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+    bar_area: Rect,
+) {
     let playback = group.playback;
     let duration = group
         .now_playing
@@ -920,7 +993,7 @@ fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect, bar_area: 
 
     let bar = Gauge::default()
         .use_unicode(true)
-        .gauge_style(Style::default().fg(Color::LightGreen).bg(Color::DarkGray))
+        .gauge_style(Style::default().fg(theme.on).bg(theme.track))
         // Without a label, the gauge shows the percentage.
         .label("")
         .ratio(ratio);
@@ -936,7 +1009,13 @@ fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect, bar_area: 
 /// The volume of `group`, as a slider between an icon showing its level and its value.
 ///
 /// Returns where the slider is.
-fn render_volume(group: &GroupState, symbols: &Symbols, frame: &mut Frame, area: Rect) -> Rect {
+fn render_volume(
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) -> Rect {
     // As wide as the value, so that the slider is centred in `area`.
     const SIDE_WIDTH: u16 = 3;
 
@@ -952,15 +1031,18 @@ fn render_volume(group: &GroupState, symbols: &Symbols, frame: &mut Frame, area:
         Line::from(symbols.volume_level(group.volume)).right_aligned(),
         icon_area,
     );
-    frame.render_widget(volume_slider(group.volume), slider_area);
+    frame.render_widget(volume_slider(group.volume, theme), slider_area);
     frame.render_widget(volume_text(group.volume), value_area);
     slider_area
 }
 
 /// A slider showing `volume`, if it is known.
-fn volume_slider(volume: Option<u8>) -> Slider<'static> {
+fn volume_slider(volume: Option<u8>, theme: &Theme) -> Slider<'static> {
     Slider::new(f64::from(volume.unwrap_or(0).min(100)), 0.0, 100.0)
         .style(&SliderStyle::default_style())
+        .filled_color(theme.slider)
+        .empty_color(theme.track)
+        .handle_color(theme.slider_handle)
         .show_handle(volume.is_some())
 }
 
@@ -970,7 +1052,12 @@ fn volume_text(volume: Option<u8>) -> String {
 }
 
 /// A popup listing the favorites, with the one at `highlighted` highlighted.
-fn render_favorites_picker(state: &HouseholdState, highlighted: usize, frame: &mut Frame) {
+fn render_favorites_picker(
+    state: &HouseholdState,
+    theme: &Theme,
+    highlighted: usize,
+    frame: &mut Frame,
+) {
     let lines: Vec<_> = state
         .favorites
         .iter()
@@ -979,14 +1066,14 @@ fn render_favorites_picker(state: &HouseholdState, highlighted: usize, frame: &m
             if let Some(description) = &fav.description {
                 spans.push(Span::styled(
                     format!("  {description}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 ));
             }
             Line::from(spans)
         })
         .collect();
     let (lines, highlighted) = if lines.is_empty() {
-        let none = Line::styled("No favorites", Style::default().fg(Color::DarkGray));
+        let none = Line::styled("No favorites", Style::default().fg(theme.muted));
         (vec![none], None)
     } else {
         (lines, Some(highlighted))
@@ -994,6 +1081,7 @@ fn render_favorites_picker(state: &HouseholdState, highlighted: usize, frame: &m
 
     render_popup(
         frame,
+        theme,
         " Favorites ",
         lines,
         highlighted,
@@ -1001,10 +1089,11 @@ fn render_favorites_picker(state: &HouseholdState, highlighted: usize, frame: &m
     );
 }
 
-/// A popup listing the groups, with the selected group (at `selected`) in green and the one at
+/// A popup listing the groups, with the selected group (at `selected`) in colour and the one at
 /// `highlighted` highlighted.
 fn render_group_picker(
     state: &HouseholdState,
+    theme: &Theme,
     selected: usize,
     highlighted: usize,
     frame: &mut Frame,
@@ -1015,7 +1104,7 @@ fn render_group_picker(
         .enumerate()
         .map(|(i, group)| {
             let name_style = if i == selected {
-                Style::default().fg(Color::Green)
+                Style::default().fg(theme.name)
             } else {
                 Style::default()
             };
@@ -1025,7 +1114,7 @@ fn render_group_picker(
             {
                 spans.push(Span::styled(
                     format!("  ♪ {}", track.title.as_deref().unwrap_or("Unknown")),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 ));
             }
             Line::from(spans)
@@ -1034,6 +1123,7 @@ fn render_group_picker(
 
     render_popup(
         frame,
+        theme,
         " Groups ",
         lines,
         Some(highlighted),
@@ -1042,7 +1132,12 @@ fn render_group_picker(
 }
 
 /// A popup listing all the speakers, with the ones to have in the group being edited checked.
-fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut Frame) {
+fn render_group_editor(
+    state: &HouseholdState,
+    theme: &Theme,
+    editor: &GroupEditor,
+    frame: &mut Frame,
+) {
     let Some(group) = state.group(&editor.group) else {
         return;
     };
@@ -1059,7 +1154,7 @@ fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut
             if player.id == group.coordinator_id {
                 spans.push(Span::styled(
                     "  coordinator",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 ));
             }
             Line::from(spans)
@@ -1068,6 +1163,7 @@ fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut
 
     render_popup(
         frame,
+        theme,
         " Group speakers ",
         lines,
         Some(editor.highlighted),
@@ -1080,6 +1176,7 @@ fn render_group_editor(state: &HouseholdState, editor: &GroupEditor, frame: &mut
 fn render_volume_mixer(
     state: &HouseholdState,
     group: &GroupState,
+    theme: &Theme,
     highlighted: usize,
     frame: &mut Frame,
 ) {
@@ -1114,6 +1211,7 @@ fn render_volume_mixer(
 
     let (area, offset) = render_popup(
         frame,
+        theme,
         " Volume ",
         lines,
         Some(highlighted),
@@ -1124,12 +1222,12 @@ fn render_volume_mixer(
     let bar_width = u16::try_from(BAR_WIDTH).unwrap_or(u16::MAX);
     for (y, (_, volume)) in (area.top()..area.bottom()).zip(rows.into_iter().skip(offset)) {
         let bar_area = Rect::new(bar_x, y, bar_width, 1).intersection(area);
-        frame.render_widget(volume_slider(volume), bar_area);
+        frame.render_widget(volume_slider(volume, theme), bar_area);
     }
 }
 
 /// A popup listing all the keyboard shortcuts.
-fn render_help(frame: &mut Frame) {
+fn render_help(theme: &Theme, frame: &mut Frame) {
     // The keys to use in the other popups are shown at their bottom.
     const SECTIONS: [(&str, &[(&str, &str)]); 2] = [
         (
@@ -1171,7 +1269,7 @@ fn render_help(frame: &mut Frame) {
         lines.push(Line::styled(
             title,
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.title)
                 .add_modifier(Modifier::BOLD),
         ));
         for (key, description) in shortcuts {
@@ -1179,28 +1277,37 @@ fn render_help(frame: &mut Frame) {
             lines.push(Line::from(vec![
                 Span::raw(*key),
                 Span::raw(padding),
-                Span::styled(*description, Style::default().fg(Color::Gray)),
+                Span::styled(*description, Style::default().fg(theme.secondary)),
             ]));
         }
     }
 
-    render_popup(frame, " Keyboard shortcuts ", lines, None, " ESC close ");
+    render_popup(
+        frame,
+        theme,
+        " Keyboard shortcuts ",
+        lines,
+        None,
+        " ESC close ",
+    );
 }
 
-/// A popup listing the settings, with the one at `highlighted` highlighted.
+/// A popup listing the settings, with the one at `highlighted` highlighted: the ones that can be
+/// toggled, then the theme.
 fn render_config_dialog(
     settings: &UiConfig,
     symbols: &Symbols,
+    theme: &Theme,
     highlighted: usize,
     frame: &mut Frame,
 ) {
-    let lines = UiSetting::ALL
+    let mut lines: Vec<_> = UiSetting::ALL
         .into_iter()
         .map(|setting| {
             let (checkbox, style) = if settings.get(setting) {
-                (symbols.checked, Style::default().fg(Color::LightGreen))
+                (symbols.checked, Style::default().fg(theme.on))
             } else {
-                (symbols.unchecked, Style::default().fg(Color::Gray))
+                (symbols.unchecked, Style::default().fg(theme.secondary))
             };
             Line::from(vec![
                 Span::styled(checkbox, style),
@@ -1209,13 +1316,50 @@ fn render_config_dialog(
             ])
         })
         .collect();
+    // Line the theme up with the settings above it.
+    let padding = Span::raw(symbols.checked).width() - Span::raw(symbols.theme).width();
+    lines.push(Line::from(vec![
+        Span::styled(symbols.theme, Style::default().fg(theme.secondary)),
+        Span::raw(" ".repeat(padding + 1)),
+        Span::raw("Theme: "),
+        Span::styled(
+            theme::display_name(&settings.theme).to_owned(),
+            Style::default().fg(theme.name),
+        ),
+    ]));
 
     render_popup(
         frame,
+        theme,
         " Configuration ",
         lines,
         Some(highlighted),
-        " ↑↓ Navigate • SPACE toggle • ESC close ",
+        " ↑↓ Navigate • SPACE change • ESC close ",
+    );
+}
+
+/// A popup listing the themes, with the current one (`current`) in colour, and the one at
+/// `highlighted` highlighted, and shown.
+fn render_theme_picker(current: &str, theme: &Theme, highlighted: usize, frame: &mut Frame) {
+    let lines = THEMES
+        .iter()
+        .map(|entry| {
+            let style = if entry.name == current {
+                Style::default().fg(theme.name)
+            } else {
+                Style::default()
+            };
+            Line::styled(entry.display_name.as_str(), style)
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        theme,
+        " Theme ",
+        lines,
+        Some(highlighted),
+        " ↑↓ Preview • ENTER choose • ESC cancel ",
     );
 }
 
@@ -1226,6 +1370,7 @@ fn render_config_dialog(
 /// they don't all fit.
 fn render_popup(
     frame: &mut Frame,
+    theme: &Theme,
     title: &str,
     lines: Vec<Line>,
     highlighted: Option<usize>,
@@ -1235,7 +1380,7 @@ fn render_popup(
     const PADDING: Padding = Padding::symmetric(2, 1);
     let help = Line::from(help)
         .centered()
-        .style(Style::default().fg(Color::DarkGray));
+        .style(Style::default().fg(theme.muted));
 
     // Fit the content, plus the padding and the borders
     let content_width = lines.iter().map(Line::width).max().unwrap_or(0)
@@ -1252,6 +1397,8 @@ fn render_popup(
     list_state.select(highlighted);
     let block = Block::bordered()
         .border_type(Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .style(theme.popup())
         .padding(PADDING)
         .title_top(title)
         .title_bottom(help);
@@ -1260,8 +1407,12 @@ fn render_popup(
         Constraint::Fill(1),
     ])
     .areas(block.inner(area));
+    let mut highlight_style = Style::default().add_modifier(Modifier::BOLD);
+    if let Some(selection) = theme.selection {
+        highlight_style = highlight_style.bg(selection);
+    }
     let list = List::new(lines)
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_style(highlight_style)
         .highlight_symbol(HIGHLIGHT_SYMBOL)
         .highlight_spacing(HighlightSpacing::Always)
         .block(block);
@@ -1321,7 +1472,12 @@ mod tests {
 
     fn press(keys: &[KeyCode], state: &HouseholdState, ui: &mut UiState) -> Option<Request> {
         keys.iter().fold(None, |_, code| {
-            handle_input(&KeyEvent::new(*code, KeyModifiers::NONE), state, ui)
+            handle_input(
+                &KeyEvent::new(*code, KeyModifiers::NONE),
+                state,
+                &UiConfig::default(),
+                ui,
+            )
         })
     }
 
@@ -1497,5 +1653,34 @@ mod tests {
         assert!(ui.help);
         press(&[KeyCode::Char('h')], &state, &mut ui);
         assert!(!ui.help);
+    }
+
+    #[test]
+    fn theme_picker_previews_highlighted_theme() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        // The theme comes after the settings that can be toggled.
+        let mut keys = vec![KeyCode::Char(',')];
+        keys.extend(UiSetting::ALL.map(|_| KeyCode::Char('j')));
+        keys.extend([KeyCode::Enter, KeyCode::Char('j')]);
+        assert!(press(&keys, &state, &mut ui).is_none());
+        assert_eq!(ui.previewed_theme(), Some(THEMES[1].name.as_str()));
+
+        let Some(Request::SetTheme(name)) = press(&[KeyCode::Enter], &state, &mut ui) else {
+            panic!("No theme chosen");
+        };
+        assert_eq!(name, THEMES[1].name);
+        assert!(ui.previewed_theme().is_none());
+        assert!(ui.config_dialog.is_some());
+
+        // Cancelling stops previewing.
+        press(
+            &[KeyCode::Enter, KeyCode::Char('j'), KeyCode::Esc],
+            &state,
+            &mut ui,
+        );
+        assert!(ui.previewed_theme().is_none());
     }
 }

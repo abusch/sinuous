@@ -16,6 +16,7 @@ use crate::{
     config::{self, Config, UiConfig, UiSetting},
     input,
     sonos::{self, ProvidedDevices},
+    theme::Theme,
     view::{self, Request, UiState},
 };
 
@@ -65,6 +66,19 @@ impl App {
         let (mut artwork, mut loaded_rx) = Artwork::new(picker);
 
         let mut ui = UiState::default();
+        let mut theme = Theme::named(&self.ui_config.theme).unwrap_or_else(|| {
+            let message = format!(
+                "Unknown theme `{}`: using the terminal's colours",
+                self.ui_config.theme
+            );
+            warn!("{message}");
+            ui.show_error(message);
+            Theme::TERMINAL
+        });
+        // The theme highlighted in the theme picker, and its name, to show it until another one is
+        // highlighted or one is chosen.
+        let mut preview: Option<(String, Theme)> = None;
+
         let mut events = EventStream::new();
         let mut redraw = time::interval(REDRAW_INTERVAL);
         redraw.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -74,7 +88,22 @@ impl App {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
             artwork.show(view::artwork_url(&state, &ui).filter(|_| self.ui_config.album_art));
-            terminal.draw(|f| view::render_ui(f, &state, &ui, &mut artwork, &self.ui_config))?;
+            let previewed = ui.previewed_theme();
+            if let Some(name) = previewed
+                && preview
+                    .as_ref()
+                    .is_none_or(|(previewed, _)| previewed != name)
+            {
+                let previewed_theme = Theme::named(name).unwrap_or(Theme::TERMINAL);
+                preview = Some((name.to_owned(), previewed_theme));
+            }
+            let shown_theme = match (previewed, &preview) {
+                (Some(_), Some((_, previewed_theme))) => previewed_theme,
+                _ => &theme,
+            };
+            terminal.draw(|f| {
+                view::render_ui(f, &state, &ui, &mut artwork, &self.ui_config, shown_theme)
+            })?;
             let animated = view::is_animated(&state, &ui);
 
             if self.ui_config.album_art && !picker_queried {
@@ -95,9 +124,16 @@ impl App {
                         if input::should_quit(&event) {
                             break;
                         }
-                        match view::handle_input(&key, &state, &mut ui) {
+                        match view::handle_input(&key, &state, &self.ui_config, &mut ui) {
                             Some(Request::Speakers(command)) => sonos.send(command),
                             Some(Request::Toggle(setting)) => self.toggle(setting, &mut ui),
+                            Some(Request::SetTheme(name)) => {
+                                if let Some(chosen) = Theme::named(&name) {
+                                    theme = chosen;
+                                    self.save("theme", name.clone(), &mut ui);
+                                    self.ui_config.theme = name;
+                                }
+                            }
                             None => {}
                         }
                     }
@@ -121,11 +157,16 @@ impl App {
     fn toggle(&mut self, setting: UiSetting, ui: &mut UiState) {
         let value = !self.ui_config.get(setting);
         self.ui_config.set(setting, value);
+        self.save(setting.key(), value, ui);
+    }
+
+    /// Set the `key` UI setting to `value` in the configuration file, showing why if it fails.
+    fn save(&self, key: &str, value: impl Into<toml_edit::Value>, ui: &mut UiState) {
         let saved = self
             .config_path
             .as_deref()
             .context("Failed to find the home directory")
-            .and_then(|path| config::save(path, setting, value));
+            .and_then(|path| config::save(path, key, value));
         if let Err(err) = saved {
             warn!("Failed to save the configuration: {err:#}");
             ui.show_error(format!("Failed to save the configuration: {err:#}"));
