@@ -39,6 +39,7 @@ tracing-subscriber = {
     "tracing-log",
   ]
 }
+tui-slider = "0.3.4"
 url = "2"
 
 [profile.release]

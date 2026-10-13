@@ -2685,6 +2685,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tui-slider",
  "url",
 ]
 
@@ -3247,6 +3248,16 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tui-slider"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa5a6ee84447b4cd5ed3fc49380fc9622a099f27a6a72ae918e4472d1f7e0c64"
+dependencies = [
+ "ratatui",
+ "unicode-width",
+]
 
 [[package]]
 name = "tungstenite"

@@ -7,7 +7,7 @@ use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Constraint, HorizontalAlignment::Right, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -20,6 +20,7 @@ use sinuous_client::{
     GroupId, PlayerId,
     playback::{PlayModes, PlayModesUpdate, PlaybackActions},
 };
+use tui_slider::{Slider, style::SliderStyle};
 use url::Url;
 
 use crate::artwork::Artwork;
@@ -179,7 +180,7 @@ pub fn render_ui(
     let [title, now_playing] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    render_title_bar(state, group, symbols, frame, title);
+    render_title_bar(state, group, frame, title);
     // Images can be drawn on top of the text, so hide the album art behind popups.
     render_now_playing(
         group,
@@ -495,16 +496,7 @@ fn render_message(frame: &mut Frame, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_title_bar(
-    state: &HouseholdState,
-    group: &GroupState,
-    symbols: &Symbols,
-    frame: &mut Frame,
-    area: Rect,
-) {
-    let [title_area, volume_area] =
-        Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(area);
-
+fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Frame, area: Rect) {
     let mut header = vec![Span::styled(
         format!("Sinuous {}", crate_version!()),
         Style::default()
@@ -523,17 +515,10 @@ fn render_title_bar(
         }
     }
     let title = Paragraph::new(Line::from(header));
-    frame.render_widget(title, title_area);
-
-    let vol_text = match group.volume {
-        Some(volume) => format!("{} {volume:2} ", symbols.volume_level),
-        None => format!("{} -- ", symbols.volume_level),
-    };
-    let vol = Paragraph::new(vol_text).alignment(Right);
-    frame.render_widget(vol, volume_area);
+    frame.render_widget(title, area);
 }
 
-/// The track playing on `group`, how far into it playback is, and the next track.
+/// The track playing on `group`, how far into it playback is, its volume, and the next track.
 fn render_now_playing(
     group: &GroupState,
     symbols: &Symbols,
@@ -542,9 +527,9 @@ fn render_now_playing(
     artwork: &mut Artwork,
     draw_art: bool,
 ) {
-    // Everything but the album art: source, track information, progress, controls and next
-    // track, with the gaps between them.
-    const DETAILS_HEIGHT: u16 = 12;
+    // Everything but the album art: source, track information, progress, controls, volume and
+    // next track, with the gaps between them.
+    const DETAILS_HEIGHT: u16 = 13;
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
 
@@ -575,7 +560,10 @@ fn render_now_playing(
         info_area,
         _,
         progress_area,
+        _,
         controls_area,
+        _,
+        volume_area,
         _,
         next_area,
         _,
@@ -587,7 +575,10 @@ fn render_now_playing(
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -595,18 +586,21 @@ fn render_now_playing(
     ])
     .areas(inner);
 
-    if draw_art && art_height > 0 {
-        // Album art is usually square: make it as wide as it is high.
-        let font = artwork.font_size();
-        let width = u32::from(art_height) * u32::from(font.height) / u32::from(font.width.max(1));
-        let width = u16::try_from(width).unwrap_or(u16::MAX);
-        if let Some(image) = artwork.image() {
-            frame.render_stateful_widget(
-                StatefulImage::default().resize(Resize::Scale(Some(FilterType::Triangle))),
-                art_area.centered_horizontally(Constraint::Length(width)),
-                image,
-            );
-        }
+    if draw_art
+        && art_height > 0
+        && let Some(image) = artwork.image()
+    {
+        // Images are drawn from the top left corner of their area: centre it on the image's size.
+        let resize = Resize::Scale(Some(FilterType::Triangle));
+        let size = image.size_for(resize.clone(), art_area.as_size());
+        frame.render_stateful_widget(
+            StatefulImage::default().resize(resize),
+            art_area.centered(
+                Constraint::Length(size.width),
+                Constraint::Length(size.height),
+            ),
+            image,
+        );
     }
 
     if let Some(source) = &group.source {
@@ -633,14 +627,24 @@ fn render_now_playing(
     };
     frame.render_widget(Paragraph::new(info).centered(), info_area);
 
+    // The volume slider lines up with the controls above it, and the progress bar with the slider.
+    let controls = controls_line(group, symbols);
+    let controls_width = u16::try_from(controls.width()).unwrap_or(u16::MAX);
+    frame.render_widget(Paragraph::new(controls).centered(), controls_area);
+    let slider_area = render_volume(
+        group,
+        symbols,
+        frame,
+        volume_area.centered_horizontally(Constraint::Length(controls_width)),
+    );
     render_progress(
         group,
         frame,
-        progress_area.centered_horizontally(Constraint::Percentage(80)),
-    );
-    frame.render_widget(
-        Paragraph::new(controls_line(group, symbols)).centered(),
-        controls_area,
+        progress_area,
+        Rect {
+            y: progress_area.y,
+            ..slider_area
+        },
     );
 
     // Next track
@@ -791,8 +795,9 @@ fn help_line(symbols: &Symbols) -> Line<'static> {
     Line::from(spans).centered()
 }
 
-/// A bar showing how far into the current track `group` is, between the elapsed and total times.
-fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
+/// A bar showing how far into the current track `group` is in `bar_area`, between the elapsed and
+/// total times, in the rest of `area`.
+fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect, bar_area: Rect) {
     let playback = group.playback;
     let duration = group
         .now_playing
@@ -817,16 +822,17 @@ fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
         0.0
     };
 
-    let elapsed = Span::raw(format_duration(elapsed));
-    let duration = Span::raw(format_duration(duration));
-    let width = |span: &Span| u16::try_from(span.width()).unwrap_or(u16::MAX);
-    let [elapsed_area, bar_area, duration_area] = Layout::horizontal([
-        Constraint::Length(width(&elapsed)),
-        Constraint::Min(1),
-        Constraint::Length(width(&duration)),
-    ])
-    .spacing(1)
-    .areas(area);
+    // Leave a space on each side of the bar.
+    let elapsed_area = Rect {
+        width: bar_area.x.saturating_sub(area.x + 1),
+        ..area
+    };
+    let duration_x = bar_area.right() + 1;
+    let duration_area = Rect {
+        x: duration_x,
+        width: area.right().saturating_sub(duration_x),
+        ..area
+    };
 
     let bar = Gauge::default()
         .use_unicode(true)
@@ -836,14 +842,47 @@ fn render_progress(group: &GroupState, frame: &mut Frame, area: Rect) {
         .ratio(ratio);
 
     frame.render_widget(
-        Paragraph::new(elapsed),
-        elapsed_area.centered_vertically(Constraint::Length(1)),
+        Paragraph::new(format_duration(elapsed)).right_aligned(),
+        elapsed_area,
     );
     frame.render_widget(bar, bar_area);
+    frame.render_widget(Paragraph::new(format_duration(duration)), duration_area);
+}
+
+/// The volume of `group`, as a slider between an icon showing its level and its value.
+///
+/// Returns where the slider is.
+fn render_volume(group: &GroupState, symbols: &Symbols, frame: &mut Frame, area: Rect) -> Rect {
+    // As wide as the value, so that the slider is centred in `area`.
+    const SIDE_WIDTH: u16 = 3;
+
+    let [icon_area, slider_area, value_area] = Layout::horizontal([
+        Constraint::Length(SIDE_WIDTH),
+        Constraint::Min(1),
+        Constraint::Length(SIDE_WIDTH),
+    ])
+    .spacing(1)
+    .areas(area);
+
     frame.render_widget(
-        Paragraph::new(duration),
-        duration_area.centered_vertically(Constraint::Length(1)),
+        Line::from(symbols.volume_level(group.volume)).right_aligned(),
+        icon_area,
     );
+    frame.render_widget(volume_slider(group.volume), slider_area);
+    frame.render_widget(volume_text(group.volume), value_area);
+    slider_area
+}
+
+/// A slider showing `volume`, if it is known.
+fn volume_slider(volume: Option<u8>) -> Slider<'static> {
+    Slider::new(f64::from(volume.unwrap_or(0).min(100)), 0.0, 100.0)
+        .style(&SliderStyle::default_style())
+        .show_handle(volume.is_some())
+}
+
+/// `volume`, right-aligned on 3 columns, or `--` if it isn't known.
+fn volume_text(volume: Option<u8>) -> String {
+    volume.map_or_else(|| " --".to_owned(), |v| format!("{v:>3}"))
 }
 
 /// A popup listing the favorites, with the one at `highlighted` highlighted.
@@ -975,43 +1014,48 @@ fn render_volume_mixer(
         .max()
         .unwrap_or(0);
 
+    // Leave room for the sliders, which are drawn over the lines afterwards.
     let lines = rows
-        .into_iter()
+        .iter()
         .map(|(label, volume)| {
-            let padding = " ".repeat(label_width - Span::raw(label).width() + 2);
-            let filled = volume.map_or(0, |v| usize::from(v.min(100)) * BAR_WIDTH / 100);
-            let volume = volume.map_or_else(|| "--".to_owned(), |v| v.to_string());
+            let padding = " ".repeat(label_width - Span::raw(*label).width() + 2);
             Line::from(vec![
-                Span::raw(label),
+                Span::raw(*label),
                 Span::raw(padding),
-                Span::styled("█".repeat(filled), Style::default().fg(Color::LightGreen)),
-                Span::styled(
-                    "░".repeat(BAR_WIDTH - filled),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(format!(" {volume:>3}")),
+                Span::raw(" ".repeat(BAR_WIDTH)),
+                Span::raw(format!(" {}", volume_text(*volume))),
             ])
         })
         .collect();
 
-    render_popup(
+    let (area, offset) = render_popup(
         frame,
         " Volume ",
         lines,
         Some(highlighted),
         " ↑↓ Navigate • ←→ adjust • ESC close ",
     );
+
+    let bar_x = area.x + u16::try_from(label_width + 2).unwrap_or(u16::MAX);
+    let bar_width = u16::try_from(BAR_WIDTH).unwrap_or(u16::MAX);
+    for (y, (_, volume)) in (area.top()..area.bottom()).zip(rows.into_iter().skip(offset)) {
+        let bar_area = Rect::new(bar_x, y, bar_width, 1).intersection(area);
+        frame.render_widget(volume_slider(volume), bar_area);
+    }
 }
 
 /// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
 /// highlighted, if any.
+///
+/// Returns where the lines are drawn, and the index of the first one shown, which may not be 0 if
+/// they don't all fit.
 fn render_popup(
     frame: &mut Frame,
     title: &str,
     lines: Vec<Line>,
     highlighted: Option<usize>,
     help: &str,
-) {
+) -> (Rect, usize) {
     const HIGHLIGHT_SYMBOL: &str = "⏵ ";
     const PADDING: Padding = Padding::symmetric(2, 1);
     let help = Line::from(help)
@@ -1031,20 +1075,25 @@ fn render_popup(
 
     let mut list_state = ListState::default();
     list_state.select(highlighted);
+    let block = Block::bordered()
+        .border_type(Rounded)
+        .padding(PADDING)
+        .title_top(title)
+        .title_bottom(help);
+    let [_, lines_area] = Layout::horizontal([
+        Constraint::Length(u16::try_from(Span::raw(HIGHLIGHT_SYMBOL).width()).unwrap_or(0)),
+        Constraint::Fill(1),
+    ])
+    .areas(block.inner(area));
     let list = List::new(lines)
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol(HIGHLIGHT_SYMBOL)
         .highlight_spacing(HighlightSpacing::Always)
-        .block(
-            Block::bordered()
-                .border_type(Rounded)
-                .padding(PADDING)
-                .title_top(title)
-                .title_bottom(help),
-        );
+        .block(block);
 
     frame.render_widget(Clear, area);
     frame.render_stateful_widget(list, area, &mut list_state);
+    (lines_area, list_state.offset())
 }
 
 fn is_shown(error: &ErrorMessage) -> bool {

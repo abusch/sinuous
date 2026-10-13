@@ -4,7 +4,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use anyhow::{Context, Result};
 use image::DynamicImage;
-use ratatui_image::{FontSize, picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, warn};
 use url::Url;
@@ -101,11 +101,6 @@ impl Artwork {
     /// Whether there is an image to show, loaded or not.
     pub fn is_wanted(&self) -> bool {
         self.wanted.is_some()
-    }
-
-    /// The size of the terminal's characters, in pixels.
-    pub fn font_size(&self) -> FontSize {
-        self.picker.font_size()
     }
 }
 
