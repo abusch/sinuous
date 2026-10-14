@@ -35,7 +35,7 @@ use crate::theme::{self, THEMES, Theme};
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 /// How much the volume changes with each key press.
-const VOLUME_STEP: i8 = 2;
+const VOLUME_STEP: i8 = 1;
 /// How wide the panel on the left (the groups, or the speakers of one) is: a third of the screen,
 /// within these bounds, unless the keys to use need more room.
 const GROUP_PANEL_MIN_WIDTH: u16 = 34;
