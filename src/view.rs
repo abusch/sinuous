@@ -589,47 +589,43 @@ fn handle_favorites_picker_input(
 /// The command for the selected group corresponding to the key pressed, if any.
 fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Option<Command> {
     let (_, group) = ui.current_group(state)?;
-    let required = match input.code {
-        KeyCode::Char(' ') => Some(Action::PlayPause),
-        KeyCode::Char('n') => Some(Action::Next),
-        KeyCode::Char('p') => Some(Action::Previous),
-        KeyCode::Char('s') => Some(Action::Shuffle),
-        KeyCode::Char('r') => Some(Action::Repeat),
-        KeyCode::Char('c') => Some(Action::Crossfade),
-        _ => None,
-    };
-    if required.is_some_and(|action| !supports(group, action)) {
-        return None;
-    }
-    let action = match input.code {
-        KeyCode::Char(' ') => {
-            if group.playback.is_some_and(|p| p.is_playing) {
-                GroupAction::Pause
-            } else {
-                GroupAction::Play
-            }
+    // The action, and what the current source needs to support for it, if anything.
+    let (action, required) = match input.code {
+        KeyCode::Char(' ') if group.playback.is_some_and(|p| p.is_playing) => {
+            (GroupAction::Pause, Some(Action::PlayPause))
         }
-        KeyCode::Char('n') => GroupAction::Next,
-        KeyCode::Char('p') => GroupAction::Previous,
-        KeyCode::Char('[') => GroupAction::AdjustVolume(-VOLUME_STEP),
-        KeyCode::Char(']') => GroupAction::AdjustVolume(VOLUME_STEP),
+        KeyCode::Char(' ') => (GroupAction::Play, Some(Action::PlayPause)),
+        KeyCode::Char('n') => (GroupAction::Next, Some(Action::Next)),
+        KeyCode::Char('p') => (GroupAction::Previous, Some(Action::Previous)),
+        KeyCode::Char('[') => (GroupAction::AdjustVolume(-VOLUME_STEP), None),
+        KeyCode::Char(']') => (GroupAction::AdjustVolume(VOLUME_STEP), None),
 
         // Play modes
-        KeyCode::Char('s') => GroupAction::SetPlayModes(PlayModesUpdate {
-            shuffle: Some(!group.playback?.play_modes.shuffle),
-            ..Default::default()
-        }),
+        KeyCode::Char('s') => {
+            let update = PlayModesUpdate {
+                shuffle: Some(!group.playback?.play_modes.shuffle),
+                ..Default::default()
+            };
+            (GroupAction::SetPlayModes(update), Some(Action::Shuffle))
+        }
         KeyCode::Char('r') => {
             let playback = group.playback?;
-            GroupAction::SetPlayModes(next_repeat(playback.play_modes, playback.actions))
+            let update = next_repeat(playback.play_modes, playback.actions);
+            (GroupAction::SetPlayModes(update), Some(Action::Repeat))
         }
-        KeyCode::Char('c') => GroupAction::SetPlayModes(PlayModesUpdate {
-            crossfade: Some(!group.playback?.play_modes.crossfade),
-            ..Default::default()
-        }),
+        KeyCode::Char('c') => {
+            let update = PlayModesUpdate {
+                crossfade: Some(!group.playback?.play_modes.crossfade),
+                ..Default::default()
+            };
+            (GroupAction::SetPlayModes(update), Some(Action::Crossfade))
+        }
 
         _ => return None,
     };
+    if required.is_some_and(|required| !supports(group, required)) {
+        return None;
+    }
     Some(Command::Group {
         group: group.id.clone(),
         action,
@@ -1570,7 +1566,7 @@ fn render_config_dialog(
         Span::raw(" ".repeat(padding + 1)),
         Span::raw("Theme: "),
         Span::styled(
-            theme::display_name(&settings.theme).to_owned(),
+            theme::display_name(&settings.theme),
             Style::default().fg(theme.name),
         ),
     ]));
