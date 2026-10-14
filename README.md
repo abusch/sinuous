@@ -29,7 +29,7 @@ need to be on the same network (or visible from your current network).
   panel showing which group each speaker is in
 - <kbd>f</kbd>: Play one of your Sonos favorites
 - <kbd>,</kbd>: Change the settings
-- <kbd>?</kbd> / <kbd>h</kbd>: Show the keyboard shortcuts
+- <kbd>?</kbd>: Show the keyboard shortcuts
 - <kbd>q</kbd>: Quit
 
 ## To run

@@ -46,7 +46,7 @@ pub fn handle_input(
         }
         Mode::VolumeMixer(highlighted) => handle_volume_mixer_input(input, state, ui, highlighted),
         Mode::Help => {
-            if matches!(input.code, KeyCode::Esc | KeyCode::Char('?' | 'h')) {
+            if matches!(input.code, KeyCode::Esc | KeyCode::Char('?')) {
                 ui.mode = Mode::NowPlaying;
             }
             None
@@ -81,7 +81,7 @@ fn handle_now_playing_input(
 
         KeyCode::Char('v') => Mode::VolumeMixer(0),
 
-        KeyCode::Char('?' | 'h') => Mode::Help,
+        KeyCode::Char('?') => Mode::Help,
         KeyCode::Char(',') => Mode::Config {
             highlighted: 0,
             theme_picker: None,
@@ -259,8 +259,8 @@ fn handle_volume_mixer_input(
             ui.mode = Mode::NowPlaying;
             return None;
         }
-        KeyCode::Left | KeyCode::Char('[') => -VOLUME_STEP,
-        KeyCode::Right | KeyCode::Char(']') => VOLUME_STEP,
+        KeyCode::Left | KeyCode::Char('h' | '[') => -VOLUME_STEP,
+        KeyCode::Right | KeyCode::Char('l' | ']') => VOLUME_STEP,
         _ => return None,
     };
     match highlighted.checked_sub(1) {
@@ -563,14 +563,14 @@ mod tests {
     }
 
     #[test]
-    fn help_closes_with_the_keys_opening_it() {
+    fn help_closes_with_the_key_opening_it() {
         let state = household();
         let mut ui = UiState::default();
         ui.sync(&state);
 
         assert!(press(&[KeyCode::Char('?'), KeyCode::Char(' ')], &state, &mut ui).is_none());
         assert!(matches!(ui.mode, Mode::Help));
-        press(&[KeyCode::Char('h')], &state, &mut ui);
+        press(&[KeyCode::Char('?')], &state, &mut ui);
         assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 

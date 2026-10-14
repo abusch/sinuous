@@ -132,7 +132,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
                 ("g", "Switch to another group"),
                 ("G", "Add or remove speakers from the group"),
                 (",", "Configuration"),
-                ("? / h", "This help"),
+                ("?", "This help"),
                 ("q", "Quit"),
             ],
         ),
