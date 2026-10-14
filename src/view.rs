@@ -56,7 +56,7 @@ const TIME_WIDTH: u16 = 5;
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
 pub struct UiState {
-    selected_group: Option<GroupId>,
+    selected_group: Option<Selection>,
     /// The favorite highlighted in the favorites picker, if it is open.
     favorites_picker: Option<usize>,
     /// The group highlighted in the group panel, on the left, if it is open.
@@ -87,6 +87,24 @@ pub enum Request {
     SetTheme(String),
 }
 
+/// The group the user is looking at.
+#[derive(Debug)]
+struct Selection {
+    group: GroupId,
+    /// Its coordinator when it was last seen, to follow it if the group gets a new ID, e.g. when
+    /// its members change.
+    coordinator: PlayerId,
+}
+
+impl Selection {
+    fn of(group: &GroupState) -> Self {
+        Self {
+            group: group.id.clone(),
+            coordinator: group.coordinator_id.clone(),
+        }
+    }
+}
+
 /// Speakers being added to or removed from a group.
 #[derive(Debug)]
 struct GroupEditor {
@@ -100,13 +118,20 @@ struct GroupEditor {
 impl UiState {
     /// Keep the selection valid for the latest `state`, e.g. when the selected group is gone.
     pub fn sync(&mut self, state: &HouseholdState) {
-        if !self
+        // When the selected group is gone, follow its coordinator to the group it is in now.
+        let selected = self
             .selected_group
             .as_ref()
-            .is_some_and(|id| state.groups.iter().any(|g| &g.id == id))
-        {
-            self.selected_group = state.groups.first().map(|g| g.id.clone());
-        }
+            .and_then(|selected| {
+                state.group(&selected.group).or_else(|| {
+                    state
+                        .groups
+                        .iter()
+                        .find(|g| g.player_ids.contains(&selected.coordinator))
+                })
+            })
+            .or_else(|| state.groups.first());
+        self.selected_group = selected.map(Selection::of);
         if let Some(highlighted) = &mut self.favorites_picker {
             *highlighted = (*highlighted).min(state.favorites.len().saturating_sub(1));
         }
@@ -168,7 +193,7 @@ impl UiState {
 
     /// The selected group and its index.
     fn current_group<'a>(&self, state: &'a HouseholdState) -> Option<(usize, &'a GroupState)> {
-        let id = self.selected_group.as_ref()?;
+        let id = &self.selected_group.as_ref()?.group;
         state.groups.iter().enumerate().find(|(_, g)| &g.id == id)
     }
 
@@ -431,7 +456,7 @@ fn handle_group_picker_input(
         }
         KeyCode::Enter => {
             if let Some(group) = state.groups.get(highlighted) {
-                ui.selected_group = Some(group.id.clone());
+                ui.selected_group = Some(Selection::of(group));
             }
             ui.group_picker = None;
         }
@@ -1735,6 +1760,50 @@ mod tests {
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(players, [PlayerId::from("b"), PlayerId::from("k")]);
         assert!(ui.group_editor.is_none());
+    }
+
+    #[test]
+    fn selection_follows_the_coordinator_when_the_group_gets_a_new_id() {
+        let mut state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(
+            &[KeyCode::Char('g'), KeyCode::Char('j'), KeyCode::Enter],
+            &state,
+            &mut ui,
+        );
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen");
+
+        // The kitchen was grouped with the office, under a new ID.
+        state.groups = vec![
+            GroupState::new(
+                "bedroom".into(),
+                "Bedroom".to_owned(),
+                "b".into(),
+                vec!["b".into()],
+            ),
+            GroupState::new(
+                "kitchen:2".into(),
+                "Kitchen + Office".to_owned(),
+                "k".into(),
+                vec!["k".into(), "o".into()],
+            ),
+        ];
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen + Office");
+
+        // The kitchen joined the bedroom.
+        state.groups = vec![GroupState::new(
+            "bedroom:2".into(),
+            "Bedroom + Kitchen".to_owned(),
+            "b".into(),
+            vec!["b".into(), "k".into()],
+        )];
+        ui.sync(&state);
+        assert_eq!(
+            ui.current_group(&state).unwrap().1.name,
+            "Bedroom + Kitchen"
+        );
     }
 
     #[test]
