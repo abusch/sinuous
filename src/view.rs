@@ -23,7 +23,7 @@ mod panel;
 mod popup;
 
 pub use input::handle_input;
-use now_playing::{now_playing_width, render_now_playing};
+use now_playing::{AlbumArt, now_playing_width, render_now_playing};
 use panel::{render_group_editor, render_group_panel};
 use popup::{
     render_config_dialog, render_favorites_picker, render_help, render_theme_picker,
@@ -303,16 +303,13 @@ pub fn render_ui(
         None => Some(body),
     };
     if let Some(area) = now_playing {
-        // Images can be drawn on top of the text, so hide the album art behind popups.
-        render_now_playing(
-            group,
-            symbols,
-            theme,
-            frame,
-            area,
-            artwork,
-            !ui.popup_open(),
-        );
+        let album_art = match (settings.album_art, ui.popup_open()) {
+            (false, _) => AlbumArt::Off,
+            // Images can be drawn on top of the text, so hide the album art behind popups.
+            (true, true) => AlbumArt::Placeholder,
+            (true, false) => AlbumArt::Shown,
+        };
+        render_now_playing(group, symbols, theme, frame, area, artwork, album_art);
     }
 
     // Popups, on top of everything else
@@ -569,6 +566,42 @@ mod tests {
                 .collect();
             assert!(screen.contains("Groups"), "{width}");
             assert_eq!(screen.contains("Nothing playing"), shown, "{width}");
+        }
+    }
+
+    #[test]
+    fn placeholder_shows_where_the_album_art_goes_when_there_is_none() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        for album_art in [true, false] {
+            let settings = UiConfig {
+                album_art,
+                ..UiConfig::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            terminal
+                .draw(|f| {
+                    render_ui(
+                        f,
+                        &state,
+                        &mut ui,
+                        &mut artwork,
+                        &settings,
+                        &Theme::TERMINAL,
+                    );
+                })
+                .unwrap();
+            let shown = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .any(|cell| cell.symbol() == "♪");
+            assert_eq!(shown, album_art);
         }
     }
 

@@ -75,6 +75,8 @@ pub struct Theme {
     pub track: Color,
     /// The explicit badge.
     pub badge: Style,
+    /// Where the album art goes when there is none to show.
+    pub art_placeholder: Style,
     pub border: Color,
 }
 
@@ -97,6 +99,7 @@ impl Theme {
         slider_handle: Color::White,
         track: Color::DarkGray,
         badge: Style::new().fg(Color::Black).bg(Color::Gray),
+        art_placeholder: Style::new().fg(Color::Gray).bg(Color::DarkGray),
         border: Color::Reset,
     };
 
@@ -126,6 +129,9 @@ impl Theme {
             badge: Style::new()
                 .fg(color(tokens::BG_BASE))
                 .bg(color(tokens::TEXT_SECONDARY)),
+            art_placeholder: Style::new()
+                .fg(color(tokens::TEXT_DIM))
+                .bg(color(tokens::BG_HIGHLIGHT)),
             border: color(tokens::BORDER_FOCUSED),
         })
     }

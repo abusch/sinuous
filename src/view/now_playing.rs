@@ -8,9 +8,9 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Gauge, Paragraph, Widget},
+    widgets::{Block, Gauge, Paragraph, Widget},
 };
-use ratatui_image::{FilterType, Resize, StatefulImage};
+use ratatui_image::{FilterType, FontSize, Resize, StatefulImage};
 
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
@@ -29,6 +29,17 @@ const VOLUME_SIDE_WIDTH: u16 = 3;
 /// How wide the times on each side of the progress bar can be, e.g. `59:59`.
 const TIME_WIDTH: u16 = 5;
 
+/// What to show where the album art goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AlbumArt {
+    /// Nothing, and leave no room for it.
+    Off,
+    /// A placeholder, even if the art is loaded.
+    Placeholder,
+    /// The art, or a placeholder until it is loaded.
+    Shown,
+}
+
 /// The track playing on `group`, how far into it playback is, its volume, and the next track.
 pub(super) fn render_now_playing(
     group: &GroupState,
@@ -37,7 +48,7 @@ pub(super) fn render_now_playing(
     frame: &mut Frame,
     area: Rect,
     artwork: &mut Artwork,
-    draw_art: bool,
+    album_art: AlbumArt,
 ) {
     // Everything but the album art: source, track information, progress, controls, volume and
     // next track, with the gaps between them.
@@ -45,9 +56,9 @@ pub(super) fn render_now_playing(
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
 
-    // Make room for the art even before it is loaded, so that the rest doesn't move when it is.
+    // Make room for the art even when there is none, so that the rest doesn't move when there is.
     // Keep a gap below it, and at least one empty line above and below everything.
-    let art_height = if artwork.is_wanted() {
+    let art_height = if album_art != AlbumArt::Off {
         let height = area
             .height
             .saturating_sub(DETAILS_HEIGHT + 3)
@@ -91,10 +102,10 @@ pub(super) fn render_now_playing(
     ])
     .areas(area);
 
-    if draw_art
-        && art_height > 0
-        && let Some(image) = artwork.image()
-    {
+    let font_size = artwork.font_size();
+    if art_height == 0 {
+        // No room for it
+    } else if let Some(image) = artwork.image().filter(|_| album_art == AlbumArt::Shown) {
         // Images are drawn from the top left corner of their area: centre it on the image's size.
         let resize = Resize::Scale(Some(FilterType::Triangle));
         let size = image.size_for(resize.clone(), art_area.as_size());
@@ -106,6 +117,8 @@ pub(super) fn render_now_playing(
             ),
             image,
         );
+    } else {
+        render_art_placeholder(font_size, symbols, theme, frame, art_area);
     }
 
     if let Some(source) = &group.source {
@@ -180,6 +193,27 @@ fn volume_width(controls: &Line) -> u16 {
     u16::try_from(controls.width())
         .unwrap_or(u16::MAX)
         .max(MIN_VOLUME_WIDTH)
+}
+
+/// A square in the middle of `area`, with an icon in it, where the album art goes when there is
+/// none to show: it is loading, or failed to, there is none, or it is hidden behind a popup.
+fn render_art_placeholder(
+    font_size: FontSize,
+    symbols: &Symbols,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    // Cells are taller than they are wide.
+    let width =
+        u32::from(area.height) * u32::from(font_size.height) / u32::from(font_size.width.max(1));
+    let width = u16::try_from(width).unwrap_or(u16::MAX).min(area.width);
+    let square = area.centered_horizontally(Constraint::Length(width));
+    frame.render_widget(Block::new().style(theme.art_placeholder), square);
+    frame.render_widget(
+        Paragraph::new(symbols.no_art).centered(),
+        square.centered_vertically(Constraint::Length(1)),
+    );
 }
 
 /// How wide what `group` is playing needs to be for the controls, the volume and the progress bar
@@ -416,6 +450,48 @@ fn format_duration(secs: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn art_placeholder_is_a_square_with_an_icon_in_the_middle() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(50, 9)).unwrap();
+        terminal
+            .draw(|f| {
+                let font_size = FontSize::new(10, 20);
+                let symbols = Symbols::choose(false);
+                render_art_placeholder(font_size, symbols, &Theme::TERMINAL, f, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let background = Theme::TERMINAL.art_placeholder.bg;
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| {
+                        let cell = &buffer[(x, y)];
+                        match (cell.symbol(), cell.bg == background.unwrap()) {
+                            ("♪", true) => '♪',
+                            (_, true) => '#',
+                            _ => '.',
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        // Cells are twice as tall as they are wide.
+        let square = format!("{}{}{}", ".".repeat(16), "#".repeat(18), ".".repeat(16));
+        let middle = format!(
+            "{}{}♪{}{}",
+            ".".repeat(16),
+            "#".repeat(9),
+            "#".repeat(8),
+            ".".repeat(16)
+        );
+        for (y, row) in rows.iter().enumerate() {
+            assert_eq!(row, if y == 4 { &middle } else { &square }, "{y}");
+        }
+    }
 
     #[test]
     fn volume_slider_handle_follows_bar() {

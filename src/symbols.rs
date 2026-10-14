@@ -32,6 +32,9 @@ pub struct Symbols {
     pub group_playing: &'static str,
     pub group_not_playing: &'static str,
 
+    /// Where the album art goes when there is none to show.
+    pub no_art: &'static str,
+
     // Settings in the configuration dialog
     pub checked: &'static str,
     pub unchecked: &'static str,
@@ -58,6 +61,7 @@ impl Symbols {
         quit: "quit",
         group_playing: "⏵",
         group_not_playing: "⏸",
+        no_art: "♪",
         checked: "[x]",
         unchecked: "[ ]",
         theme: "🎨",
@@ -83,6 +87,7 @@ impl Symbols {
         quit: "\u{f0206}",              // nf-md-exit_to_app
         group_playing: "\u{f040c}",     // nf-md-play_circle
         group_not_playing: "\u{f03e5}", // nf-md-pause_circle
+        no_art: "\u{f075a}",            // nf-md-music
         checked: "\u{f0132}",           // nf-md-checkbox_marked
         unchecked: "\u{f0131}",         // nf-md-checkbox_blank_outline
         theme: "\u{f03d8}",             // nf-md-palette

@@ -4,7 +4,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use anyhow::{Context, Result};
 use image::DynamicImage;
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{FontSize, picker::Picker, protocol::StatefulProtocol};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, warn};
 use url::Url;
@@ -24,8 +24,6 @@ pub struct Artwork {
     wanted: Option<Url>,
     /// The image to draw, once `wanted` is loaded.
     image: Option<StatefulProtocol>,
-    /// Whether `wanted` couldn't be fetched.
-    failed: bool,
     fetch: Option<JoinHandle<()>>,
     /// Recently loaded images, most recent last.
     cache: VecDeque<(Url, DynamicImage)>,
@@ -46,7 +44,6 @@ impl Artwork {
             loaded_tx,
             wanted: None,
             image: None,
-            failed: false,
             fetch: None,
             cache: VecDeque::new(),
         };
@@ -68,7 +65,6 @@ impl Artwork {
         }
         self.wanted = url.cloned();
         self.image = None;
-        self.failed = false;
         if let Some(fetch) = self.fetch.take() {
             fetch.abort();
         }
@@ -91,17 +87,12 @@ impl Artwork {
 
     /// Take in an image fetched by [`Artwork::show`].
     pub fn loaded(&mut self, (url, image): Loaded) {
-        let is_wanted = self.wanted.as_ref() == Some(&url);
         let image = match image {
             Ok(image) => image,
             // The image is only decoration: don't bother the user with it.
-            Err(err) => {
-                warn!("Failed to fetch album art from {url}: {err:#}");
-                self.failed |= is_wanted;
-                return;
-            }
+            Err(err) => return warn!("Failed to fetch album art from {url}: {err:#}"),
         };
-        if is_wanted {
+        if self.wanted.as_ref() == Some(&url) {
             self.image = Some(self.picker.new_resize_protocol(image.clone()));
         }
         if self.cache.len() == CACHE_SIZE {
@@ -115,9 +106,9 @@ impl Artwork {
         self.image.as_mut()
     }
 
-    /// Whether there is an image to show, loaded or being fetched.
-    pub fn is_wanted(&self) -> bool {
-        self.wanted.is_some() && !self.failed
+    /// The size of the terminal's cells, in pixels, as far as is known.
+    pub fn font_size(&self) -> FontSize {
+        self.picker.font_size()
     }
 }
 
@@ -134,25 +125,4 @@ async fn fetch(client: &reqwest::Client, url: &Url) -> Result<DynamicImage> {
     tokio::task::spawn_blocking(move || image::load_from_memory(&bytes))
         .await?
         .context("Failed to decode the image")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn images_that_failed_to_load_take_no_room() {
-        let (mut artwork, _loaded_rx) = Artwork::new(Picker::halfblocks());
-        let url = Url::parse("http://192.0.2.1/art.jpg").unwrap();
-        artwork.show(Some(&url));
-        assert!(artwork.is_wanted());
-
-        artwork.loaded((url.clone(), Err(anyhow::anyhow!("Unreachable"))));
-        assert!(!artwork.is_wanted());
-
-        // It is fetched again when shown again.
-        artwork.show(None);
-        artwork.show(Some(&url));
-        assert!(artwork.is_wanted());
-    }
 }
