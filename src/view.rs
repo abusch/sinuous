@@ -57,23 +57,33 @@ const TIME_WIDTH: u16 = 5;
 #[derive(Debug, Default)]
 pub struct UiState {
     selected_group: Option<Selection>,
-    /// The favorite highlighted in the favorites picker, if it is open.
-    favorites_picker: Option<usize>,
-    /// The group highlighted in the group panel, on the left, if it is open.
-    group_picker: Option<usize>,
-    group_editor: Option<GroupEditor>,
-    /// The row highlighted in the volume mixer, if it is open: 0 for the selected group, then its
-    /// members.
-    volume_mixer: Option<usize>,
-    /// Whether the keyboard shortcuts are shown.
-    help: bool,
-    /// The setting highlighted in the configuration dialog, if it is open: one of
-    /// [`UiSetting::ALL`], or the theme after them.
-    config_dialog: Option<usize>,
-    /// The theme highlighted in the theme picker, if it is open, as an index in [`THEMES`].
-    theme_picker: Option<usize>,
+    mode: Mode,
     /// The last error that wasn't about the speakers.
     error: Option<ErrorMessage>,
+}
+
+/// What is open beside, or on top of, what the selected group is playing.
+#[derive(Debug, Default)]
+enum Mode {
+    #[default]
+    NowPlaying,
+    /// The group panel, on the left, with the group at this index highlighted.
+    GroupPicker(usize),
+    /// The group editor, in the panel on the left.
+    GroupEditor(GroupEditor),
+    /// The favorites picker, with the favorite at this index highlighted.
+    FavoritesPicker(usize),
+    /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
+    VolumeMixer(usize),
+    /// The keyboard shortcuts.
+    Help,
+    /// The configuration dialog, and the theme picker on top of it, if open.
+    Config {
+        /// The setting highlighted: one of [`UiSetting::ALL`], or the theme after them.
+        highlighted: usize,
+        /// The theme highlighted in the theme picker, as an index in [`THEMES`].
+        theme_picker: Option<usize>,
+    },
 }
 
 /// What a key press asks for, besides changing what is shown.
@@ -115,6 +125,22 @@ struct GroupEditor {
     members: HashSet<PlayerId>,
 }
 
+impl GroupEditor {
+    /// An editor for the speakers of `group`, with its coordinator highlighted.
+    fn new(group: &GroupState, state: &HouseholdState) -> Self {
+        let highlighted = state
+            .players
+            .iter()
+            .position(|p| p.id == group.coordinator_id)
+            .unwrap_or(0);
+        Self {
+            group: group.id.clone(),
+            highlighted,
+            members: group.player_ids.iter().cloned().collect(),
+        }
+    }
+}
+
 impl UiState {
     /// Keep the selection valid for the latest `state`, e.g. when the selected group is gone.
     pub fn sync(&mut self, state: &HouseholdState) {
@@ -132,49 +158,45 @@ impl UiState {
             })
             .or_else(|| state.groups.first());
         self.selected_group = selected.map(Selection::of);
-        if let Some(highlighted) = &mut self.favorites_picker {
-            *highlighted = (*highlighted).min(state.favorites.len().saturating_sub(1));
-        }
-        if state.groups.is_empty() {
-            self.group_picker = None;
-        } else if let Some(highlighted) = &mut self.group_picker {
-            *highlighted = (*highlighted).min(state.groups.len() - 1);
-        }
-        if self
-            .group_editor
-            .as_ref()
-            .is_some_and(|editor| state.group(&editor.group).is_none())
-        {
-            self.group_editor = None;
-        }
-        if let Some(editor) = &mut self.group_editor {
-            editor.highlighted = editor
-                .highlighted
-                .min(state.players.len().saturating_sub(1));
-        }
+
         let mixer_rows = self
             .current_group(state)
             .map(|(_, group)| state.members(group).count() + 1);
-        self.volume_mixer = self
-            .volume_mixer
-            .zip(mixer_rows)
-            .map(|(highlighted, rows)| highlighted.min(rows - 1));
+        match &mut self.mode {
+            Mode::GroupPicker(_) if state.groups.is_empty() => self.mode = Mode::NowPlaying,
+            Mode::GroupPicker(highlighted) => clamp(highlighted, state.groups.len()),
+            Mode::GroupEditor(editor) if state.group(&editor.group).is_none() => {
+                self.mode = Mode::NowPlaying;
+            }
+            Mode::GroupEditor(editor) => clamp(&mut editor.highlighted, state.players.len()),
+            Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
+            Mode::VolumeMixer(highlighted) => match mixer_rows {
+                Some(rows) => clamp(highlighted, rows),
+                None => self.mode = Mode::NowPlaying,
+            },
+            Mode::NowPlaying | Mode::Help | Mode::Config { .. } => {}
+        }
     }
 
     /// Whether a popup is open in the middle of the screen. The group panel and the group editor
     /// are beside what is playing, not on top of it.
     fn popup_open(&self) -> bool {
-        self.volume_mixer.is_some()
-            || self.favorites_picker.is_some()
-            || self.help
-            || self.config_dialog.is_some()
-            || self.theme_picker.is_some()
+        !matches!(
+            self.mode,
+            Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_)
+        )
     }
 
     /// The name of the theme to show instead of the configured one, while choosing one.
     pub fn previewed_theme(&self) -> Option<&'static str> {
-        let entry = THEMES.get(self.theme_picker?)?;
-        Some(&entry.name)
+        let Mode::Config {
+            theme_picker: Some(highlighted),
+            ..
+        } = self.mode
+        else {
+            return None;
+        };
+        Some(&THEMES.get(highlighted)?.name)
     }
 
     /// Show `message` in the header for a while.
@@ -196,29 +218,20 @@ impl UiState {
         let id = &self.selected_group.as_ref()?.group;
         state.groups.iter().enumerate().find(|(_, g)| &g.id == id)
     }
+}
 
-    /// Open the group picker, with the selected group highlighted.
-    fn open_group_picker(&mut self, state: &HouseholdState) {
-        if let Some((index, _)) = self.current_group(state) {
-            self.group_picker = Some(index);
-        }
-    }
+/// Keep `highlighted` within a list of `len` rows.
+fn clamp(highlighted: &mut usize, len: usize) {
+    *highlighted = (*highlighted).min(len.saturating_sub(1));
+}
 
-    /// Open the group editor for the selected group, with its coordinator highlighted.
-    fn open_group_editor(&mut self, state: &HouseholdState) {
-        let Some((_, group)) = self.current_group(state) else {
-            return;
-        };
-        let highlighted = state
-            .players
-            .iter()
-            .position(|p| p.id == group.coordinator_id)
-            .unwrap_or(0);
-        self.group_editor = Some(GroupEditor {
-            group: group.id.clone(),
-            highlighted,
-            members: group.player_ids.iter().cloned().collect(),
-        });
+/// The row to highlight in a list of `len` rows when `key` moves the highlight from the row at
+/// `highlighted`, if it does. The highlight stays on the first and last rows.
+fn navigate(key: KeyCode, highlighted: usize, len: usize) -> Option<usize> {
+    match key {
+        KeyCode::Up | KeyCode::Char('k') => Some(highlighted.saturating_sub(1)),
+        KeyCode::Down | KeyCode::Char('j') => Some((highlighted + 1).min(len.saturating_sub(1))),
+        _ => None,
     }
 }
 
@@ -256,10 +269,10 @@ pub fn render_ui(
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
     render_title_bar(state, ui, group, symbols, theme, frame, title);
-    let panel_help = match (ui.group_picker, &ui.group_editor) {
-        (Some(_), _) => Some(GROUP_PANEL_HELP),
-        (None, Some(_)) => Some(GROUP_EDITOR_HELP),
-        (None, None) => None,
+    let panel_help = match ui.mode {
+        Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
+        Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
+        _ => None,
     };
     let now_playing = match panel_help {
         Some(help) => {
@@ -273,18 +286,20 @@ pub fn render_ui(
             // than covering part of it.
             let fits = rest.width >= now_playing_width(group, symbols, theme);
             let panel = if fits { panel } else { body };
-            if let Some(highlighted) = ui.group_picker {
-                render_group_panel(
+            match &ui.mode {
+                Mode::GroupPicker(highlighted) => render_group_panel(
                     state,
                     symbols,
                     theme,
                     group_index,
-                    highlighted,
+                    *highlighted,
                     frame,
                     panel,
-                );
-            } else if let Some(editor) = &ui.group_editor {
-                render_group_editor(state, symbols, theme, editor, frame, panel);
+                ),
+                Mode::GroupEditor(editor) => {
+                    render_group_editor(state, symbols, theme, editor, frame, panel);
+                }
+                _ => {}
             }
             fits.then_some(rest)
         }
@@ -304,20 +319,24 @@ pub fn render_ui(
     }
 
     // Popups, on top of everything else
-    if let Some(highlighted) = ui.favorites_picker {
-        render_favorites_picker(state, theme, highlighted, frame);
-    }
-    if let Some(highlighted) = ui.volume_mixer {
-        render_volume_mixer(state, group, theme, highlighted, frame);
-    }
-    if let Some(highlighted) = ui.config_dialog {
-        render_config_dialog(settings, symbols, theme, highlighted, frame);
-    }
-    if let Some(highlighted) = ui.theme_picker {
-        render_theme_picker(&settings.theme, theme, highlighted, frame);
-    }
-    if ui.help {
-        render_help(theme, frame);
+    match ui.mode {
+        Mode::FavoritesPicker(highlighted) => {
+            render_favorites_picker(state, theme, highlighted, frame);
+        }
+        Mode::VolumeMixer(highlighted) => {
+            render_volume_mixer(state, group, theme, highlighted, frame);
+        }
+        Mode::Help => render_help(theme, frame),
+        Mode::Config {
+            highlighted,
+            theme_picker,
+        } => {
+            render_config_dialog(settings, symbols, theme, highlighted, frame);
+            if let Some(highlighted) = theme_picker {
+                render_theme_picker(&settings.theme, theme, highlighted, frame);
+            }
+        }
+        Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) => {}
     }
 }
 
@@ -328,56 +347,61 @@ pub fn handle_input(
     settings: &UiConfig,
     ui: &mut UiState,
 ) -> Option<Request> {
-    if ui.help {
-        if matches!(input.code, KeyCode::Esc | KeyCode::Char('?' | 'h')) {
-            ui.help = false;
+    let command = match ui.mode {
+        Mode::NowPlaying => handle_now_playing_input(input, state, ui),
+        Mode::GroupPicker(highlighted) => {
+            handle_group_picker_input(input, state, ui, highlighted);
+            None
         }
-        return None;
-    }
-    if let Some(highlighted) = ui.theme_picker {
-        return handle_theme_picker_input(input, ui, highlighted);
-    }
-    if let Some(highlighted) = ui.config_dialog {
-        return handle_config_dialog_input(input, settings, ui, highlighted);
-    }
-    let command = handle_command_input(input, state, ui)?;
-    Some(Request::Speakers(command))
+        Mode::GroupEditor(_) => handle_group_editor_input(input, state, ui),
+        Mode::FavoritesPicker(highlighted) => {
+            handle_favorites_picker_input(input, state, ui, highlighted)
+        }
+        Mode::VolumeMixer(highlighted) => handle_volume_mixer_input(input, state, ui, highlighted),
+        Mode::Help => {
+            if matches!(input.code, KeyCode::Esc | KeyCode::Char('?' | 'h')) {
+                ui.mode = Mode::NowPlaying;
+            }
+            None
+        }
+        Mode::Config {
+            highlighted,
+            theme_picker: None,
+        } => return handle_config_dialog_input(input, settings, ui, highlighted),
+        Mode::Config {
+            highlighted,
+            theme_picker: Some(theme),
+        } => return handle_theme_picker_input(input, ui, highlighted, theme),
+    };
+    command.map(Request::Speakers)
 }
 
-/// Update `ui` according to the key pressed outside of the help and the configuration dialog, and
-/// return the command to send to the speakers, if any.
-fn handle_command_input(
+/// Update `ui` according to the key pressed while nothing is open, and return the command to send
+/// to the speakers, if any.
+fn handle_now_playing_input(
     input: &KeyEvent,
     state: &HouseholdState,
     ui: &mut UiState,
 ) -> Option<Command> {
-    if let Some(highlighted) = ui.group_picker {
-        handle_group_picker_input(input, state, ui, highlighted);
-        return None;
-    }
-    if ui.group_editor.is_some() {
-        return handle_group_editor_input(input, state, ui);
-    }
-    if let Some(highlighted) = ui.volume_mixer {
-        return handle_volume_mixer_input(input, state, ui, highlighted);
-    }
-    if let Some(highlighted) = ui.favorites_picker {
-        return handle_favorites_picker_input(input, state, ui, highlighted);
-    }
-    match input.code {
-        KeyCode::Char('f') => ui.favorites_picker = Some(0),
+    ui.mode = match input.code {
+        KeyCode::Char('f') => Mode::FavoritesPicker(0),
 
         // Group switching
-        KeyCode::Char('g') => ui.open_group_picker(state),
-        KeyCode::Char('G') => ui.open_group_editor(state),
+        KeyCode::Char('g') => Mode::GroupPicker(ui.current_group(state)?.0),
+        KeyCode::Char('G') => {
+            Mode::GroupEditor(GroupEditor::new(ui.current_group(state)?.1, state))
+        }
 
-        KeyCode::Char('v') => ui.volume_mixer = Some(0),
+        KeyCode::Char('v') => Mode::VolumeMixer(0),
 
-        KeyCode::Char('?' | 'h') => ui.help = true,
-        KeyCode::Char(',') => ui.config_dialog = Some(0),
+        KeyCode::Char('?' | 'h') => Mode::Help,
+        KeyCode::Char(',') => Mode::Config {
+            highlighted: 0,
+            theme_picker: None,
+        },
 
         _ => return group_command(input, state, ui),
-    }
+    };
     None
 }
 
@@ -391,13 +415,14 @@ fn handle_config_dialog_input(
 ) -> Option<Request> {
     // The settings that can be toggled, then the theme
     let rows = UiSetting::ALL.len() + 1;
+    if let Some(highlighted) = navigate(input.code, highlighted, rows) {
+        ui.mode = Mode::Config {
+            highlighted,
+            theme_picker: None,
+        };
+        return None;
+    }
     match input.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            ui.config_dialog = Some(highlighted.saturating_sub(1));
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            ui.config_dialog = Some((highlighted + 1).min(rows - 1));
-        }
         KeyCode::Char(' ') | KeyCode::Enter => match UiSetting::ALL.get(highlighted) {
             Some(setting) => return Some(Request::Toggle(*setting)),
             None => {
@@ -405,35 +430,42 @@ fn handle_config_dialog_input(
                     .iter()
                     .position(|entry| entry.name == settings.theme)
                     .unwrap_or(0);
-                ui.theme_picker = Some(current);
+                ui.mode = Mode::Config {
+                    highlighted,
+                    theme_picker: Some(current),
+                };
             }
         },
-        KeyCode::Esc | KeyCode::Char(',') => ui.config_dialog = None,
+        KeyCode::Esc | KeyCode::Char(',') => ui.mode = Mode::NowPlaying,
         _ => {}
     }
     None
 }
 
-/// Update `ui` according to the key pressed while the theme picker is open, with the theme at
-/// `highlighted` highlighted, and return the theme chosen, if any.
+/// Update `ui` according to the key pressed while the theme picker is open, over the
+/// configuration dialog with the setting at `setting` highlighted, with the theme at `highlighted`
+/// highlighted, and return the theme chosen, if any.
 fn handle_theme_picker_input(
     input: &KeyEvent,
     ui: &mut UiState,
+    setting: usize,
     highlighted: usize,
 ) -> Option<Request> {
+    let config = |theme_picker| Mode::Config {
+        highlighted: setting,
+        theme_picker,
+    };
+    if let Some(highlighted) = navigate(input.code, highlighted, THEMES.len()) {
+        ui.mode = config(Some(highlighted));
+        return None;
+    }
     match input.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            ui.theme_picker = Some(highlighted.saturating_sub(1));
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            ui.theme_picker = Some((highlighted + 1).min(THEMES.len() - 1));
-        }
         KeyCode::Enter => {
-            ui.theme_picker = None;
+            ui.mode = config(None);
             let entry = THEMES.get(highlighted)?;
             return Some(Request::SetTheme(entry.name.clone()));
         }
-        KeyCode::Esc => ui.theme_picker = None,
+        KeyCode::Esc => ui.mode = config(None),
         _ => {}
     }
     None
@@ -447,20 +479,18 @@ fn handle_group_picker_input(
     ui: &mut UiState,
     highlighted: usize,
 ) {
+    if let Some(highlighted) = navigate(input.code, highlighted, state.groups.len()) {
+        ui.mode = Mode::GroupPicker(highlighted);
+        return;
+    }
     match input.code {
-        KeyCode::Up | KeyCode::Char('k') => ui.group_picker = Some(highlighted.saturating_sub(1)),
-        KeyCode::Down | KeyCode::Char('j') => {
-            if highlighted + 1 < state.groups.len() {
-                ui.group_picker = Some(highlighted + 1);
-            }
-        }
         KeyCode::Enter => {
             if let Some(group) = state.groups.get(highlighted) {
                 ui.selected_group = Some(Selection::of(group));
             }
-            ui.group_picker = None;
+            ui.mode = Mode::NowPlaying;
         }
-        KeyCode::Esc | KeyCode::Char('g') => ui.group_picker = None,
+        KeyCode::Esc | KeyCode::Char('g') => ui.mode = Mode::NowPlaying,
         _ => {}
     }
 }
@@ -472,17 +502,15 @@ fn handle_group_editor_input(
     state: &HouseholdState,
     ui: &mut UiState,
 ) -> Option<Command> {
-    let editor = ui.group_editor.as_mut()?;
+    let Mode::GroupEditor(editor) = &mut ui.mode else {
+        return None;
+    };
     let group = state.group(&editor.group)?;
+    if let Some(highlighted) = navigate(input.code, editor.highlighted, state.players.len()) {
+        editor.highlighted = highlighted;
+        return None;
+    }
     match input.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            editor.highlighted = editor.highlighted.saturating_sub(1)
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if editor.highlighted + 1 < state.players.len() {
-                editor.highlighted += 1;
-            }
-        }
         KeyCode::Char(' ') => {
             let player = state.players.get(editor.highlighted)?;
             // The coordinator stays, so that the group keeps playing.
@@ -491,27 +519,37 @@ fn handle_group_editor_input(
             }
         }
         KeyCode::Enter => {
-            let editor = ui.group_editor.take()?;
-            if group.player_ids.iter().cloned().collect::<HashSet<_>>() == editor.members {
-                return None;
-            }
-            let others = state
-                .players
-                .iter()
-                .filter(|p| p.id != group.coordinator_id && editor.members.contains(&p.id))
-                .map(|p| p.id.clone());
-            let players = std::iter::once(group.coordinator_id.clone())
-                .chain(others)
-                .collect();
-            return Some(Command::Group {
-                group: group.id.clone(),
-                action: GroupAction::SetMembers(players),
-            });
+            let command = set_members(state, group, &editor.members);
+            ui.mode = Mode::NowPlaying;
+            return command;
         }
-        KeyCode::Esc | KeyCode::Char('G') => ui.group_editor = None,
+        KeyCode::Esc | KeyCode::Char('G') => ui.mode = Mode::NowPlaying,
         _ => {}
     }
     None
+}
+
+/// The command making `members` the speakers of `group`, unless they already are.
+fn set_members(
+    state: &HouseholdState,
+    group: &GroupState,
+    members: &HashSet<PlayerId>,
+) -> Option<Command> {
+    if group.player_ids.iter().cloned().collect::<HashSet<_>>() == *members {
+        return None;
+    }
+    let others = state
+        .players
+        .iter()
+        .filter(|p| p.id != group.coordinator_id && members.contains(&p.id))
+        .map(|p| p.id.clone());
+    let players = std::iter::once(group.coordinator_id.clone())
+        .chain(others)
+        .collect();
+    Some(Command::Group {
+        group: group.id.clone(),
+        action: GroupAction::SetMembers(players),
+    })
 }
 
 /// Update `ui` according to the key pressed while the volume mixer is open, with the row at
@@ -523,19 +561,15 @@ fn handle_volume_mixer_input(
     highlighted: usize,
 ) -> Option<Command> {
     let (_, group) = ui.current_group(state)?;
+    // The group, then its members
+    let rows = state.members(group).count() + 1;
+    if let Some(highlighted) = navigate(input.code, highlighted, rows) {
+        ui.mode = Mode::VolumeMixer(highlighted);
+        return None;
+    }
     let delta = match input.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            ui.volume_mixer = Some(highlighted.saturating_sub(1));
-            return None;
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if highlighted < state.members(group).count() {
-                ui.volume_mixer = Some(highlighted + 1);
-            }
-            return None;
-        }
         KeyCode::Esc | KeyCode::Char('v') => {
-            ui.volume_mixer = None;
+            ui.mode = Mode::NowPlaying;
             return None;
         }
         KeyCode::Left | KeyCode::Char('[') => -VOLUME_STEP,
@@ -562,17 +596,13 @@ fn handle_favorites_picker_input(
     ui: &mut UiState,
     highlighted: usize,
 ) -> Option<Command> {
+    if let Some(highlighted) = navigate(input.code, highlighted, state.favorites.len()) {
+        ui.mode = Mode::FavoritesPicker(highlighted);
+        return None;
+    }
     match input.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            ui.favorites_picker = Some(highlighted.saturating_sub(1));
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if highlighted + 1 < state.favorites.len() {
-                ui.favorites_picker = Some(highlighted + 1);
-            }
-        }
         KeyCode::Enter => {
-            ui.favorites_picker = None;
+            ui.mode = Mode::NowPlaying;
             let favorite = state.favorites.get(highlighted)?;
             let (_, group) = ui.current_group(state)?;
             return Some(Command::Group {
@@ -580,7 +610,7 @@ fn handle_favorites_picker_input(
                 action: GroupAction::LoadFavorite(favorite.id.clone()),
             });
         }
-        KeyCode::Esc | KeyCode::Char('f') => ui.favorites_picker = None,
+        KeyCode::Esc | KeyCode::Char('f') => ui.mode = Mode::NowPlaying,
         _ => {}
     }
     None
@@ -1757,7 +1787,7 @@ mod tests {
         };
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(players, [PlayerId::from("b"), PlayerId::from("k")]);
-        assert!(ui.group_editor.is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]
@@ -1818,12 +1848,12 @@ mod tests {
             KeyCode::Enter,
         ];
         assert!(press(&keys, &state, &mut ui).is_none());
-        assert!(ui.group_editor.is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
 
         let keys = [KeyCode::Char('G'), KeyCode::Char('j'), KeyCode::Char(' ')];
         assert!(press(&keys, &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
-        assert!(ui.group_editor.is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]
@@ -1862,7 +1892,7 @@ mod tests {
         assert_eq!(delta, VOLUME_STEP);
 
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
-        assert!(ui.volume_mixer.is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]
@@ -2040,7 +2070,7 @@ mod tests {
         // Keys don't reach the main screen while it is open.
         assert!(press(&[KeyCode::Char('c')], &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
-        assert!(ui.config_dialog.is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]
@@ -2050,9 +2080,9 @@ mod tests {
         ui.sync(&state);
 
         assert!(press(&[KeyCode::Char('?'), KeyCode::Char(' ')], &state, &mut ui).is_none());
-        assert!(ui.help);
+        assert!(matches!(ui.mode, Mode::Help));
         press(&[KeyCode::Char('h')], &state, &mut ui);
-        assert!(!ui.help);
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]
@@ -2073,7 +2103,7 @@ mod tests {
         };
         assert_eq!(name, THEMES[1].name);
         assert!(ui.previewed_theme().is_none());
-        assert!(ui.config_dialog.is_some());
+        assert!(matches!(ui.mode, Mode::Config { .. }));
 
         // Cancelling stops previewing.
         press(
