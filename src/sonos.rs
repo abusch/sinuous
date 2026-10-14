@@ -210,13 +210,19 @@ pub struct TrackInfo {
     pub image_url: Option<Url>,
 }
 
-impl From<&Track> for TrackInfo {
-    fn from(track: &Track) -> Self {
+impl TrackInfo {
+    /// The track of `item`, with its image found with `images`, if given.
+    ///
+    /// Players report items with an empty track when there is nothing to show, e.g. for a suspended
+    /// Spotify Connect session.
+    fn new(item: &QueueItem, images: Option<&Images>) -> Option<Self> {
+        let track = &item.track;
+        track.name.as_ref()?;
         let artist = track
             .artist
             .as_ref()
             .or_else(|| track.album.as_ref()?.artist.as_ref());
-        Self {
+        Some(Self {
             title: track.name.clone(),
             artist: artist.map(|a| a.name.clone()),
             album: track.album.as_ref().map(|a| a.name.clone()),
@@ -225,8 +231,8 @@ impl From<&Track> for TrackInfo {
                 .as_ref()
                 .is_some_and(|a| a.tags.contains(&Tag::TagExplicit)),
             duration_secs: track.duration_millis.map(millis_to_secs),
-            image_url: None,
-        }
+            image_url: images.and_then(|images| images.resolve(track)),
+        })
     }
 }
 
@@ -481,11 +487,12 @@ impl Service {
                             group.now_playing = metadata
                                 .current_item
                                 .as_ref()
-                                .and_then(|item| track_info(item, &images));
+                                .and_then(|item| TrackInfo::new(item, Some(&images)));
+                            // Only the image of the current track is shown.
                             group.next_track = metadata
                                 .next_item
                                 .as_ref()
-                                .and_then(|item| track_info(item, &images));
+                                .and_then(|item| TrackInfo::new(item, None));
                             group.source = Source::new(&metadata);
                         }
                         EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
@@ -911,16 +918,6 @@ impl Images<'_> {
             None => Url::parse(image.as_str()).ok(),
         }
     }
-}
-
-/// Players report items with an empty track when there is nothing to show, e.g. for a suspended
-/// Spotify Connect session.
-fn track_info(item: &QueueItem, images: &Images) -> Option<TrackInfo> {
-    item.track.name.as_ref()?;
-    Some(TrackInfo {
-        image_url: images.resolve(&item.track),
-        ..(&item.track).into()
-    })
 }
 
 fn millis_to_secs(millis: u64) -> u32 {
