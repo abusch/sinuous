@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
-use crossterm::event::{Event, EventStream};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::{Picker, ProtocolType};
@@ -111,7 +111,10 @@ impl App {
             select! {
                 event = events.try_next() => {
                     let event = event?.ok_or_else(|| anyhow!("Failed to receive keyboard input"))?;
-                    if let Event::Key(key) = event {
+                    // Some terminals, e.g. on Windows, also report key releases.
+                    if let Event::Key(key) = event
+                        && key.kind == KeyEventKind::Press
+                    {
                         if input::should_quit(&event) {
                             break;
                         }
