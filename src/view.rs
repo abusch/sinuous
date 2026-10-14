@@ -27,7 +27,7 @@ use crate::artwork::Artwork;
 use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{
     Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
-    Source, TrackInfo,
+    PlayerInfo, Source, TrackInfo,
 };
 use crate::symbols::Symbols;
 use crate::theme::{self, THEMES, Theme};
@@ -36,11 +36,15 @@ use crate::theme::{self, THEMES, Theme};
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 2;
-/// How wide the group panel is: a third of the screen, within these bounds.
+/// How wide the panel on the left (the groups, or the speakers of one) is: a third of the screen,
+/// within these bounds, unless the keys to use need more room.
 const GROUP_PANEL_MIN_WIDTH: u16 = 34;
 const GROUP_PANEL_MAX_WIDTH: u16 = 48;
 /// How many lines each group takes in the group panel.
 const GROUP_HEIGHT: u16 = 3;
+/// The keys to use in the group panel, and in the group editor.
+const GROUP_PANEL_HELP: &str = " ↑↓ • ENTER select • ESC close ";
+const GROUP_EDITOR_HELP: &str = " ↑↓ • SPACE toggle • ENTER apply • ESC cancel ";
 /// How narrow the volume slider can be, with its icon and value.
 const MIN_VOLUME_WIDTH: u16 = 44;
 /// How wide the icon and the value on each side of the volume slider are: as wide as each other,
@@ -132,11 +136,10 @@ impl UiState {
             .map(|(highlighted, rows)| highlighted.min(rows - 1));
     }
 
-    /// Whether a popup is open in the middle of the screen. The group panel is beside what is
-    /// playing, not on top of it.
+    /// Whether a popup is open in the middle of the screen. The group panel and the group editor
+    /// are beside what is playing, not on top of it.
     fn popup_open(&self) -> bool {
-        self.group_editor.is_some()
-            || self.volume_mixer.is_some()
+        self.volume_mixer.is_some()
             || self.favorites_picker.is_some()
             || self.help
             || self.config_dialog.is_some()
@@ -241,24 +244,36 @@ pub fn render_ui(
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
     render_title_bar(state, ui, group, symbols, theme, frame, title);
-    let now_playing = match ui.group_picker {
-        Some(highlighted) => {
-            let width = (body.width / 3).clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH);
+    let panel_help = match (ui.group_picker, &ui.group_editor) {
+        (Some(_), _) => Some(GROUP_PANEL_HELP),
+        (None, Some(_)) => Some(GROUP_EDITOR_HELP),
+        (None, None) => None,
+    };
+    let now_playing = match panel_help {
+        Some(help) => {
+            let help_width = u16::try_from(Span::raw(help).width() + 2).unwrap_or(u16::MAX);
+            let width = (body.width / 3)
+                .clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH)
+                .max(help_width);
             let [panel, rest] =
                 Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(body);
             // When what is playing doesn't fit beside the panel, the panel takes its place rather
-            // than covering part of it: it shows what each group is playing anyway.
+            // than covering part of it.
             let fits = rest.width >= now_playing_width(group, symbols, theme);
             let panel = if fits { panel } else { body };
-            render_group_panel(
-                state,
-                symbols,
-                theme,
-                group_index,
-                highlighted,
-                frame,
-                panel,
-            );
+            if let Some(highlighted) = ui.group_picker {
+                render_group_panel(
+                    state,
+                    symbols,
+                    theme,
+                    group_index,
+                    highlighted,
+                    frame,
+                    panel,
+                );
+            } else if let Some(editor) = &ui.group_editor {
+                render_group_editor(state, symbols, theme, editor, frame, panel);
+            }
             fits.then_some(rest)
         }
         None => Some(body),
@@ -282,9 +297,6 @@ pub fn render_ui(
     }
     if let Some(highlighted) = ui.volume_mixer {
         render_volume_mixer(state, group, theme, highlighted, frame);
-    }
-    if let Some(editor) = &ui.group_editor {
-        render_group_editor(state, theme, editor, frame);
     }
     if let Some(highlighted) = ui.config_dialog {
         render_config_dialog(settings, symbols, theme, highlighted, frame);
@@ -1172,7 +1184,35 @@ fn render_group_panel(
     frame: &mut Frame,
     area: Rect,
 ) {
-    let help = Line::from(" ↑↓ • ENTER select • ESC close ")
+    let items = state
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, group)| group_lines(group, i == selected, symbols, theme))
+        .collect();
+    render_panel(
+        frame,
+        theme,
+        area,
+        " Groups ",
+        GROUP_PANEL_HELP,
+        items,
+        highlighted,
+    );
+}
+
+/// A panel titled `title` in `area`, listing `items` a line apart, scrolled so that the one at
+/// `highlighted` is shown, and highlighted, with the keys to use (`help`) at the bottom.
+fn render_panel<const N: usize>(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    title: &str,
+    help: &str,
+    items: Vec<[Line; N]>,
+    highlighted: usize,
+) {
+    let help = Line::from(help)
         .centered()
         .style(Style::default().fg(theme.muted));
     let block = Block::bordered()
@@ -1180,26 +1220,27 @@ fn render_group_panel(
         .border_style(Style::default().fg(theme.border))
         .style(theme.popup())
         .padding(Padding::vertical(1))
-        .title_top(" Groups ")
+        .title_top(title)
         .title_bottom(help);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Groups are a line apart, and scrolled so that the highlighted one is shown.
-    let shown = usize::from((inner.height + 1) / (GROUP_HEIGHT + 1)).max(1);
+    // Items are a line apart, and scrolled so that the highlighted one is shown.
+    let item_height = u16::try_from(N).unwrap_or(u16::MAX);
+    let shown = usize::from((inner.height + 1) / (item_height + 1)).max(1);
     let first = highlighted.saturating_sub(shown - 1);
-    let rows = (inner.y..).step_by(usize::from(GROUP_HEIGHT + 1));
-    for ((i, group), y) in state.groups.iter().enumerate().skip(first).zip(rows) {
+    let rows = (inner.y..).step_by(usize::from(item_height + 1));
+    for ((i, lines), y) in items.into_iter().enumerate().skip(first).zip(rows) {
         let item_area = Rect {
             y,
-            height: GROUP_HEIGHT,
+            height: item_height,
             ..inner
         }
         .intersection(inner);
         if item_area.is_empty() {
             break;
         }
-        // A bar on the left of the highlighted group, and room for it on the others.
+        // A bar on the left of the highlighted item, and room for it on the others.
         let [bar_area, _, lines_area] = Layout::horizontal([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -1219,7 +1260,6 @@ fn render_group_panel(
                 bar_area,
             );
         }
-        let lines = group_lines(group, i == selected, symbols, theme);
         frame.render_widget(Paragraph::new(Vec::from(lines)), lines_area);
     }
 }
@@ -1277,44 +1317,78 @@ fn group_lines<'a>(
     ]
 }
 
-/// A popup listing all the speakers, with the ones to have in the group being edited checked.
+/// A panel listing all the speakers in `area`, with the ones to have in the group being edited
+/// checked.
 fn render_group_editor(
     state: &HouseholdState,
+    symbols: &Symbols,
     theme: &Theme,
     editor: &GroupEditor,
     frame: &mut Frame,
+    area: Rect,
 ) {
     let Some(group) = state.group(&editor.group) else {
         return;
     };
-    let lines = state
+    let items = state
         .players
         .iter()
-        .map(|player| {
-            let checkbox = if editor.members.contains(&player.id) {
-                "[x] "
-            } else {
-                "[ ] "
-            };
-            let mut spans = vec![Span::raw(checkbox), Span::raw(player.name.as_str())];
-            if player.id == group.coordinator_id {
-                spans.push(Span::styled(
-                    "  coordinator",
-                    Style::default().fg(theme.muted),
-                ));
-            }
-            Line::from(spans)
-        })
+        .map(|player| speaker_lines(state, player, group, editor, symbols, theme))
         .collect();
-
-    render_popup(
+    render_panel(
         frame,
         theme,
+        area,
         " Group speakers ",
-        lines,
-        Some(editor.highlighted),
-        " ↑↓ Navigate • SPACE toggle • ENTER apply • ESC cancel ",
+        GROUP_EDITOR_HELP,
+        items,
+        editor.highlighted,
     );
+}
+
+/// The lines showing `player` in the editor of `group`: its name, whether it is to be in the
+/// group, and which group it is in now.
+fn speaker_lines<'a>(
+    state: &HouseholdState,
+    player: &'a PlayerInfo,
+    group: &GroupState,
+    editor: &GroupEditor,
+    symbols: &Symbols,
+    theme: &Theme,
+) -> [Line<'a>; 2] {
+    let muted = Style::default().fg(theme.muted);
+    let secondary = Style::default().fg(theme.secondary);
+    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
+    let (checkbox, checkbox_style) = if editor.members.contains(&player.id) {
+        name_style = name_style.fg(theme.name);
+        (symbols.checked, Style::default().fg(theme.on))
+    } else {
+        (symbols.unchecked, secondary)
+    };
+
+    let current = state
+        .groups
+        .iter()
+        .find(|g| g.player_ids.contains(&player.id));
+    let location = match current {
+        Some(current) if current.id == group.id => "In this group".to_owned(),
+        Some(current) if current.player_ids.len() > 1 => format!("In {}", current.name),
+        _ => "On its own".to_owned(),
+    };
+    let mut status_line = vec![
+        Span::styled(checkbox, checkbox_style),
+        Span::raw(" "),
+        Span::styled(location, secondary),
+    ];
+    if player.id == group.coordinator_id {
+        status_line.push(Span::styled(" · ", muted));
+        status_line.push(Span::styled("coordinator", muted));
+    }
+
+    [
+        Line::styled(player.name.as_str(), name_style),
+        Line::from(status_line),
+    ]
 }
 
 /// A popup with the volume of `group` and of each of its members, with the row at `highlighted`
@@ -1584,7 +1658,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     use super::*;
-    use crate::sonos::{PlayerAction, PlayerInfo};
+    use crate::sonos::PlayerAction;
 
     fn household() -> HouseholdState {
         let player = |id: &str, name: &str| PlayerInfo {
@@ -1757,6 +1831,42 @@ mod tests {
                 .collect();
             assert!(screen.contains("Groups"), "{width}");
             assert_eq!(screen.contains("Nothing playing"), shown, "{width}");
+        }
+    }
+
+    #[test]
+    fn group_editor_is_a_panel_beside_what_is_playing() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut state = household();
+        state.status = ConnectionStatus::Connected;
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('G')], &state, &mut ui);
+
+        let settings = UiConfig::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        terminal
+            .draw(|f| {
+                render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+            })
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for shown in [
+            "Group speakers",
+            GROUP_EDITOR_HELP,
+            "In this group · coordinator",
+            "On its own",
+            "Nothing playing",
+        ] {
+            assert!(screen.contains(shown), "{shown}");
         }
     }
 
