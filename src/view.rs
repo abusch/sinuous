@@ -1562,7 +1562,9 @@ fn render_config_dialog(
         })
         .collect();
     // Line the theme up with the settings above it.
-    let padding = Span::raw(symbols.checked).width() - Span::raw(symbols.theme).width();
+    let padding = Span::raw(symbols.checked)
+        .width()
+        .saturating_sub(Span::raw(symbols.theme).width());
     lines.push(Line::from(vec![
         Span::styled(symbols.theme, Style::default().fg(theme.secondary)),
         Span::raw(" ".repeat(padding + 1)),
