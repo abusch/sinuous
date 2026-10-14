@@ -84,6 +84,6 @@ theme = "terminal"
 - [ ] Support more actions (seek forward, backward, change playing mode, volume...)
 - [x] Display play/pause indicator as well as current play mode (shuffle+repeat)
 - [ ] Allow searching for tracks and modify the queue
-- [ ] Allow customizing colours
+- [x] Allow customizing colours
 - [x] Allow specifying speaker to connect to as a command line argument
 - [x] Handle grouping of speakers
