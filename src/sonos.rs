@@ -133,6 +133,8 @@ impl GroupState {
 pub struct PlayerInfo {
     pub id: PlayerId,
     pub name: String,
+    /// The model of its main device, e.g. `Arc Ultra` for a home theatre, if it is known.
+    pub model: Option<String>,
     pub volume: Option<u8>,
 }
 
@@ -762,6 +764,14 @@ fn player_infos(topology: &Topology) -> Vec<PlayerInfo> {
         .map(|player| PlayerInfo {
             id: player.id.clone(),
             name: player.name.clone(),
+            // A player made of several devices, e.g. a soundbar with a sub, has the ID of its main
+            // one.
+            model: player
+                .devices
+                .iter()
+                .find(|device| device.id == player.id)
+                .or(player.devices.first())
+                .map(|device| device.model_display_name.clone()),
             volume: None,
         })
         .collect();

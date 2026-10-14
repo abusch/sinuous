@@ -1346,8 +1346,8 @@ fn render_group_editor(
     );
 }
 
-/// The lines showing `player` in the editor of `group`: its name, whether it is to be in the
-/// group, and which group it is in now.
+/// The lines showing `player` in the editor of `group`: its name and model, whether it is to be
+/// in the group, and which group it is in now.
 fn speaker_lines<'a>(
     state: &HouseholdState,
     player: &'a PlayerInfo,
@@ -1386,9 +1386,22 @@ fn speaker_lines<'a>(
     }
 
     [
-        Line::styled(player.name.as_str(), name_style),
+        Line::from(speaker_name(player, name_style, theme)),
         Line::from(status_line),
     ]
+}
+
+/// The name of `player` in `style`, followed by its model, if it is known.
+fn speaker_name<'a>(player: &'a PlayerInfo, style: Style, theme: &Theme) -> Vec<Span<'a>> {
+    let mut spans = vec![Span::styled(player.name.as_str(), style)];
+    if let Some(model) = &player.model {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            model.as_str(),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    spans
 }
 
 /// A popup with the volume of `group` and of each of its members, with the row at `highlighted`
@@ -1402,16 +1415,15 @@ fn render_volume_mixer(
 ) {
     const BAR_WIDTH: usize = 20;
 
-    let rows: Vec<_> = std::iter::once(("Group", group.volume))
-        .chain(
-            state
-                .members(group)
-                .map(|player| (player.name.as_str(), player.volume)),
-        )
+    let rows: Vec<_> = std::iter::once((Line::from("Group"), group.volume))
+        .chain(state.members(group).map(|player| {
+            let label = speaker_name(player, Style::default(), theme);
+            (Line::from(label), player.volume)
+        }))
         .collect();
     let label_width = rows
         .iter()
-        .map(|(label, _)| Span::raw(*label).width())
+        .map(|(label, _)| label.width())
         .max()
         .unwrap_or(0);
 
@@ -1419,13 +1431,14 @@ fn render_volume_mixer(
     let lines = rows
         .iter()
         .map(|(label, volume)| {
-            let padding = " ".repeat(label_width - Span::raw(*label).width() + 2);
-            Line::from(vec![
-                Span::raw(*label),
+            let padding = " ".repeat(label_width - label.width() + 2);
+            let mut spans = label.spans.clone();
+            spans.extend([
                 Span::raw(padding),
                 Span::raw(" ".repeat(BAR_WIDTH)),
                 Span::raw(format!(" {}", volume_text(*volume))),
-            ])
+            ]);
+            Line::from(spans)
         })
         .collect();
 
@@ -1664,6 +1677,7 @@ mod tests {
         let player = |id: &str, name: &str| PlayerInfo {
             id: id.into(),
             name: name.to_owned(),
+            model: Some("Move".to_owned()),
             volume: Some(20),
         };
         HouseholdState {
@@ -1862,12 +1876,54 @@ mod tests {
         for shown in [
             "Group speakers",
             GROUP_EDITOR_HELP,
+            "Bedroom Move",
             "In this group · coordinator",
             "On its own",
             "Nothing playing",
         ] {
             assert!(screen.contains(shown), "{shown}");
         }
+    }
+
+    #[test]
+    fn volume_mixer_shows_models_with_sliders_lined_up() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut state = household();
+        state.status = ConnectionStatus::Connected;
+        state.players[0].model = Some("Arc Ultra".to_owned());
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('v')], &state, &mut ui);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        terminal
+            .draw(|f| {
+                let settings = UiConfig::default();
+                render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let slider_start = |label: &str| {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(label))
+                .unwrap_or_else(|| panic!("{label}"));
+            row.char_indices()
+                .position(|(_, c)| matches!(c, '━' | '●' | '─'))
+                .unwrap()
+        };
+        let group = slider_start("Group");
+        assert_eq!(slider_start("Bedroom Arc Ultra"), group);
+        assert_eq!(slider_start("Office Move"), group);
     }
 
     fn repeat_cycle(actions: PlaybackActions) -> Vec<(bool, bool)> {
