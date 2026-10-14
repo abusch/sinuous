@@ -28,6 +28,10 @@ pub struct Symbols {
     pub config: &'static str,
     pub quit: &'static str,
 
+    // Whether groups are playing, in the group panel
+    pub group_playing: &'static str,
+    pub group_not_playing: &'static str,
+
     // Settings in the configuration dialog
     pub checked: &'static str,
     pub unchecked: &'static str,
@@ -52,6 +56,8 @@ impl Symbols {
         help: "help",
         config: "config",
         quit: "quit",
+        group_playing: "⏵",
+        group_not_playing: "⏸",
         checked: "[x]",
         unchecked: "[ ]",
         theme: "🎨",
@@ -59,25 +65,27 @@ impl Symbols {
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
     const NERD_FONT: Self = Self {
-        playing: "\u{f040a}",       // nf-md-play
-        paused: "\u{f03e4}",        // nf-md-pause
-        volume_off: "\u{f0581}",    // nf-md-volume_off
-        volume_low: "\u{f057f}",    // nf-md-volume_low
-        volume_medium: "\u{f0580}", // nf-md-volume_medium
-        volume_high: "\u{f057e}",   // nf-md-volume_high
-        shuffle: "\u{f049f}",       // nf-md-shuffle_variant
-        repeat: "\u{f0456}",        // nf-md-repeat
-        repeat_one: "\u{f0458}",    // nf-md-repeat_once
-        crossfade: "\u{f0915}",     // nf-md-transition
-        next: "\u{f04ad}",          // nf-md-skip_next
-        previous: "\u{f04ae}",      // nf-md-skip_previous
-        playing_on: "\u{f04c3}",    // nf-md-speaker
-        help: "\u{f02d7}",          // nf-md-help_circle
-        config: "\u{f0493}",        // nf-md-cog
-        quit: "\u{f0206}",          // nf-md-exit_to_app
-        checked: "\u{f0132}",       // nf-md-checkbox_marked
-        unchecked: "\u{f0131}",     // nf-md-checkbox_blank_outline
-        theme: "\u{f03d8}",         // nf-md-palette
+        playing: "\u{f040a}",           // nf-md-play
+        paused: "\u{f03e4}",            // nf-md-pause
+        volume_off: "\u{f0581}",        // nf-md-volume_off
+        volume_low: "\u{f057f}",        // nf-md-volume_low
+        volume_medium: "\u{f0580}",     // nf-md-volume_medium
+        volume_high: "\u{f057e}",       // nf-md-volume_high
+        shuffle: "\u{f049f}",           // nf-md-shuffle_variant
+        repeat: "\u{f0456}",            // nf-md-repeat
+        repeat_one: "\u{f0458}",        // nf-md-repeat_once
+        crossfade: "\u{f0915}",         // nf-md-transition
+        next: "\u{f04ad}",              // nf-md-skip_next
+        previous: "\u{f04ae}",          // nf-md-skip_previous
+        playing_on: "\u{f04c3}",        // nf-md-speaker
+        help: "\u{f02d7}",              // nf-md-help_circle
+        config: "\u{f0493}",            // nf-md-cog
+        quit: "\u{f0206}",              // nf-md-exit_to_app
+        group_playing: "\u{f040c}",     // nf-md-play_circle
+        group_not_playing: "\u{f03e5}", // nf-md-pause_circle
+        checked: "\u{f0132}",           // nf-md-checkbox_marked
+        unchecked: "\u{f0131}",         // nf-md-checkbox_blank_outline
+        theme: "\u{f03d8}",             // nf-md-palette
     };
 
     /// The volume level `volume` is shown as.

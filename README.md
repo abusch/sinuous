@@ -5,9 +5,9 @@
 
 Sinuous is a simple TUI for controlling local Sonos speakers.
 
-It currently allows you to switch between the different groups (zone players),
-displays the current and next tracks with their album art, and lets you play
-your Sonos favorites.
+It currently allows you to switch between the different groups (zone players)
+from a panel showing what each of them is playing, displays the current and next
+tracks with their album art, and lets you play your Sonos favorites.
 
 Album art is drawn with the Kitty, iTerm2 or Sixel graphics protocols in
 terminals that support one of them, and with coloured blocks otherwise.
@@ -24,7 +24,7 @@ need to be on the same network (or visible from your current network).
 - <kbd>s</kbd> / <kbd>r</kbd> / <kbd>c</kbd>: Toggle shuffle / repeat (all, one, off) / crossfade
 - <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
 - <kbd>v</kbd>: Adjust the volume of the current group or of each of its speakers
-- <kbd>g</kbd>: Switch to another group
+- <kbd>g</kbd>: Switch to another group, from a panel showing what each group is playing
 - <kbd>G</kbd>: Add speakers to / remove speakers from the current group
 - <kbd>f</kbd>: Play one of your Sonos favorites
 - <kbd>,</kbd>: Change the settings

@@ -36,6 +36,18 @@ use crate::theme::{self, THEMES, Theme};
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 2;
+/// How wide the group panel is: a third of the screen, within these bounds.
+const GROUP_PANEL_MIN_WIDTH: u16 = 34;
+const GROUP_PANEL_MAX_WIDTH: u16 = 48;
+/// How many lines each group takes in the group panel.
+const GROUP_HEIGHT: u16 = 3;
+/// How narrow the volume slider can be, with its icon and value.
+const MIN_VOLUME_WIDTH: u16 = 44;
+/// How wide the icon and the value on each side of the volume slider are: as wide as each other,
+/// so that the slider is centred.
+const VOLUME_SIDE_WIDTH: u16 = 3;
+/// How wide the times on each side of the progress bar can be, e.g. `59:59`.
+const TIME_WIDTH: u16 = 5;
 
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
@@ -43,7 +55,7 @@ pub struct UiState {
     selected_group: Option<GroupId>,
     /// The favorite highlighted in the favorites picker, if it is open.
     favorites_picker: Option<usize>,
-    /// The group highlighted in the group picker, if it is open.
+    /// The group highlighted in the group panel, on the left, if it is open.
     group_picker: Option<usize>,
     group_editor: Option<GroupEditor>,
     /// The row highlighted in the volume mixer, if it is open: 0 for the selected group, then its
@@ -120,9 +132,10 @@ impl UiState {
             .map(|(highlighted, rows)| highlighted.min(rows - 1));
     }
 
+    /// Whether a popup is open in the middle of the screen. The group panel is beside what is
+    /// playing, not on top of it.
     fn popup_open(&self) -> bool {
-        self.group_picker.is_some()
-            || self.group_editor.is_some()
+        self.group_editor.is_some()
             || self.volume_mixer.is_some()
             || self.favorites_picker.is_some()
             || self.help
@@ -224,20 +237,44 @@ pub fn render_ui(
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, theme, "No speakers found.\n\nPress q to quit.");
     };
-    let [title, now_playing] =
+    let [title, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
     render_title_bar(state, ui, group, symbols, theme, frame, title);
-    // Images can be drawn on top of the text, so hide the album art behind popups.
-    render_now_playing(
-        group,
-        symbols,
-        theme,
-        frame,
-        now_playing,
-        artwork,
-        !ui.popup_open(),
-    );
+    let now_playing = match ui.group_picker {
+        Some(highlighted) => {
+            let width = (body.width / 3).clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH);
+            let [panel, rest] =
+                Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(body);
+            // When what is playing doesn't fit beside the panel, the panel takes its place rather
+            // than covering part of it: it shows what each group is playing anyway.
+            let fits = rest.width >= now_playing_width(group, symbols, theme);
+            let panel = if fits { panel } else { body };
+            render_group_panel(
+                state,
+                symbols,
+                theme,
+                group_index,
+                highlighted,
+                frame,
+                panel,
+            );
+            fits.then_some(rest)
+        }
+        None => Some(body),
+    };
+    if let Some(area) = now_playing {
+        // Images can be drawn on top of the text, so hide the album art behind popups.
+        render_now_playing(
+            group,
+            symbols,
+            theme,
+            frame,
+            area,
+            artwork,
+            !ui.popup_open(),
+        );
+    }
 
     // Popups, on top of everything else
     if let Some(highlighted) = ui.favorites_picker {
@@ -245,9 +282,6 @@ pub fn render_ui(
     }
     if let Some(highlighted) = ui.volume_mixer {
         render_volume_mixer(state, group, theme, highlighted, frame);
-    }
-    if let Some(highlighted) = ui.group_picker {
-        render_group_picker(state, theme, group_index, highlighted, frame);
     }
     if let Some(editor) = &ui.group_editor {
         render_group_editor(state, theme, editor, frame);
@@ -727,7 +761,6 @@ fn render_now_playing(
     const DETAILS_HEIGHT: u16 = 13;
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
-    const MIN_VOLUME_WIDTH: u16 = 44;
 
     // Make room for the art even before it is loaded, so that the rest doesn't move when it is.
     // Keep a gap below it, and at least one empty line above and below everything.
@@ -822,9 +855,7 @@ fn render_now_playing(
     // The volume slider lines up with the controls above it, unless they are too narrow (with
     // icons), and the progress bar with the slider.
     let controls = controls_line(group, symbols, theme);
-    let volume_width = u16::try_from(controls.width())
-        .unwrap_or(u16::MAX)
-        .max(MIN_VOLUME_WIDTH);
+    let volume_width = volume_width(&controls);
     frame.render_widget(Paragraph::new(controls).centered(), controls_area);
     let slider_area = render_volume(
         group,
@@ -858,6 +889,23 @@ fn render_now_playing(
         ]);
         frame.render_widget(Paragraph::new(next).centered(), next_area);
     }
+}
+
+/// How wide the volume is, with the slider between its icon and value: as wide as the
+/// `controls` above it, unless they are too narrow.
+fn volume_width(controls: &Line) -> u16 {
+    u16::try_from(controls.width())
+        .unwrap_or(u16::MAX)
+        .max(MIN_VOLUME_WIDTH)
+}
+
+/// How wide what `group` is playing needs to be for the controls, the volume and the progress bar
+/// to fit.
+fn now_playing_width(group: &GroupState, symbols: &Symbols, theme: &Theme) -> u16 {
+    let volume = volume_width(&controls_line(group, symbols, theme));
+    // The progress bar is as wide as the volume slider, with the times on each side of it.
+    let bar = volume.saturating_sub(2 * (VOLUME_SIDE_WIDTH + 1));
+    volume.max(bar + 2 * (TIME_WIDTH + 1))
 }
 
 /// Where the music comes from, e.g. `Spotify · Album · Altered State`.
@@ -1016,13 +1064,10 @@ fn render_volume(
     frame: &mut Frame,
     area: Rect,
 ) -> Rect {
-    // As wide as the value, so that the slider is centred in `area`.
-    const SIDE_WIDTH: u16 = 3;
-
     let [icon_area, slider_area, value_area] = Layout::horizontal([
-        Constraint::Length(SIDE_WIDTH),
+        Constraint::Length(VOLUME_SIDE_WIDTH),
         Constraint::Min(1),
-        Constraint::Length(SIDE_WIDTH),
+        Constraint::Length(VOLUME_SIDE_WIDTH),
     ])
     .spacing(1)
     .areas(area);
@@ -1116,46 +1161,120 @@ fn render_favorites_picker(
     );
 }
 
-/// A popup listing the groups, with the selected group (at `selected`) in colour and the one at
-/// `highlighted` highlighted.
-fn render_group_picker(
+/// A panel in `area` listing the groups and what they are playing, with the selected group (at
+/// `selected`) in colour and the one at `highlighted` highlighted.
+fn render_group_panel(
     state: &HouseholdState,
+    symbols: &Symbols,
     theme: &Theme,
     selected: usize,
     highlighted: usize,
     frame: &mut Frame,
+    area: Rect,
 ) {
-    let lines = state
-        .groups
-        .iter()
-        .enumerate()
-        .map(|(i, group)| {
-            let name_style = if i == selected {
-                Style::default().fg(theme.name)
-            } else {
-                Style::default()
-            };
-            let mut spans = vec![Span::styled(group.name.as_str(), name_style)];
-            if group.playback.is_some_and(|p| p.is_playing)
-                && let Some(track) = &group.now_playing
-            {
-                spans.push(Span::styled(
-                    format!("  ♪ {}", track.title.as_deref().unwrap_or("Unknown")),
-                    Style::default().fg(theme.muted),
-                ));
-            }
-            Line::from(spans)
-        })
-        .collect();
+    let help = Line::from(" ↑↓ • ENTER select • ESC close ")
+        .centered()
+        .style(Style::default().fg(theme.muted));
+    let block = Block::bordered()
+        .border_type(Rounded)
+        .border_style(Style::default().fg(theme.border))
+        .style(theme.popup())
+        .padding(Padding::vertical(1))
+        .title_top(" Groups ")
+        .title_bottom(help);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    render_popup(
-        frame,
-        theme,
-        " Groups ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Navigate • ENTER select • ESC close ",
-    );
+    // Groups are a line apart, and scrolled so that the highlighted one is shown.
+    let shown = usize::from((inner.height + 1) / (GROUP_HEIGHT + 1)).max(1);
+    let first = highlighted.saturating_sub(shown - 1);
+    let rows = (inner.y..).step_by(usize::from(GROUP_HEIGHT + 1));
+    for ((i, group), y) in state.groups.iter().enumerate().skip(first).zip(rows) {
+        let item_area = Rect {
+            y,
+            height: GROUP_HEIGHT,
+            ..inner
+        }
+        .intersection(inner);
+        if item_area.is_empty() {
+            break;
+        }
+        // A bar on the left of the highlighted group, and room for it on the others.
+        let [bar_area, _, lines_area] = Layout::horizontal([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(item_area);
+        if i == highlighted {
+            if let Some(selection) = theme.selection {
+                frame.render_widget(
+                    Block::new().style(Style::default().bg(selection)),
+                    item_area,
+                );
+            }
+            let bar = vec![Line::from("▌"); usize::from(item_area.height)];
+            frame.render_widget(
+                Paragraph::new(bar).style(Style::default().fg(theme.title)),
+                bar_area,
+            );
+        }
+        let lines = group_lines(group, i == selected, symbols, theme);
+        frame.render_widget(Paragraph::new(Vec::from(lines)), lines_area);
+    }
+}
+
+/// The lines showing `group` in the group panel: its name, whether it is playing, and what.
+fn group_lines<'a>(
+    group: &'a GroupState,
+    selected: bool,
+    symbols: &Symbols,
+    theme: &Theme,
+) -> [Line<'a>; GROUP_HEIGHT as usize] {
+    let muted = Style::default().fg(theme.muted);
+    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
+    if selected {
+        name_style = name_style.fg(theme.name);
+    }
+
+    let (icon, status, status_style) = if group.playback.is_some_and(|p| p.is_playing) {
+        (
+            symbols.group_playing,
+            "Playing",
+            Style::default().fg(theme.on),
+        )
+    } else {
+        (
+            symbols.group_not_playing,
+            "Not playing",
+            Style::default().fg(theme.secondary),
+        )
+    };
+    let mut status_line = vec![Span::styled(format!("{icon} {status}"), status_style)];
+    if let Some(service) = group.source.as_ref().and_then(|s| s.service.as_deref()) {
+        status_line.push(Span::styled(" · ", muted));
+        status_line.push(Span::styled(service, Style::default().fg(theme.secondary)));
+    }
+
+    // The track, lined up with the status after the icon
+    let mut track_line = vec![Span::raw(" ".repeat(Span::raw(icon).width() + 1))];
+    match &group.now_playing {
+        Some(track) => track_line.extend([
+            Span::raw(track.title.as_deref().unwrap_or("Unknown title")),
+            Span::styled(" · ", muted),
+            Span::styled(
+                track.artist.as_deref().unwrap_or("Unknown artist"),
+                Style::default().fg(theme.artist),
+            ),
+        ]),
+        None => track_line.push(Span::styled("No content", muted)),
+    }
+
+    [
+        Line::styled(group.name.as_str(), name_style),
+        Line::from(status_line),
+        Line::from(track_line),
+    ]
 }
 
 /// A popup listing all the speakers, with the ones to have in the group being edited checked.
@@ -1602,6 +1721,43 @@ mod tests {
 
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
         assert!(ui.volume_mixer.is_none());
+    }
+
+    #[test]
+    fn group_panel_takes_the_place_of_what_is_playing_when_both_dont_fit() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut state = household();
+        state.status = ConnectionStatus::Connected;
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+
+        let settings = UiConfig::default();
+        let group = &state.groups[0];
+        let needed =
+            now_playing_width(group, Symbols::choose(settings.nerd_font), &Theme::TERMINAL);
+        for (width, shown) in [
+            (GROUP_PANEL_MIN_WIDTH + needed, true),
+            (GROUP_PANEL_MIN_WIDTH + needed - 1, false),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            terminal
+                .draw(|f| {
+                    render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+                })
+                .unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains("Groups"), "{width}");
+            assert_eq!(screen.contains("Nothing playing"), shown, "{width}");
+        }
     }
 
     fn repeat_cycle(actions: PlaybackActions) -> Vec<(bool, bool)> {
