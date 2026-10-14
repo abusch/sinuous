@@ -66,9 +66,8 @@ impl App {
             ui.show_error(message);
             Theme::TERMINAL
         });
-        // The theme highlighted in the theme picker, and its name, to show it until another one is
-        // highlighted or one is chosen.
-        let mut preview: Option<(String, Theme)> = None;
+        // The theme highlighted in the theme picker, and its name, while it is open.
+        let mut preview: Option<(&str, Theme)> = None;
 
         let mut events = EventStream::new();
         let mut redraw = time::interval(REDRAW_INTERVAL);
@@ -79,19 +78,12 @@ impl App {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
             artwork.show(view::artwork_url(&state, &ui).filter(|_| self.ui_config.album_art));
-            let previewed = ui.previewed_theme();
-            if let Some(name) = previewed
-                && preview
-                    .as_ref()
-                    .is_none_or(|(previewed, _)| previewed != name)
-            {
-                let previewed_theme = Theme::named(name).unwrap_or(Theme::TERMINAL);
-                preview = Some((name.to_owned(), previewed_theme));
+            match ui.previewed_theme() {
+                Some(name) if preview.as_ref().is_some_and(|(shown, _)| *shown == name) => {}
+                Some(name) => preview = Some((name, Theme::named(name).unwrap_or(Theme::TERMINAL))),
+                None => preview = None,
             }
-            let shown_theme = match (previewed, &preview) {
-                (Some(_), Some((_, previewed_theme))) => previewed_theme,
-                _ => &theme,
-            };
+            let shown_theme = preview.as_ref().map_or(&theme, |(_, previewed)| previewed);
             terminal.draw(|f| {
                 view::render_ui(f, &state, &ui, &mut artwork, &self.ui_config, shown_theme)
             })?;
