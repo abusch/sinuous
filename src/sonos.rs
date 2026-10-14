@@ -339,6 +339,9 @@ struct Service {
     subscribed: HashSet<Subscription>,
     /// Subscriptions in progress.
     subscriptions: JoinSet<(Subscription, Result<(), sinuous_client::Error>)>,
+    /// The subscriptions that failed last time, and have been reported: they are retried until they
+    /// succeed, without reporting them again.
+    failing: HashSet<Subscription>,
     favorites_subscribed: bool,
     /// The version of the favorites in the state.
     favorites_version: Option<String>,
@@ -354,6 +357,7 @@ impl Service {
             state_tx,
             subscribed: HashSet::new(),
             subscriptions: JoinSet::new(),
+            failing: HashSet::new(),
             favorites_subscribed: false,
             favorites_version: None,
         }
@@ -515,6 +519,8 @@ impl Service {
             groups.chain(players).collect()
         };
         self.subscribed.retain(|s| wanted.contains(s));
+        self.failing
+            .retain(|s| *s == Subscription::Favorites || wanted.contains(s));
         for subscription in wanted {
             if !self.subscribed.insert(subscription.clone()) {
                 continue;
@@ -533,11 +539,17 @@ impl Service {
         result: Result<(Subscription, Result<(), sinuous_client::Error>), JoinError>,
     ) {
         match result {
-            Ok((_, Ok(()))) => {}
+            Ok((subscription, Ok(()))) => {
+                self.failing.remove(&subscription);
+            }
             Ok((subscription, Err(err))) => {
                 // Try again later.
                 self.subscribed.remove(&subscription);
-                self.report_error(format!("Failed to get updates from a speaker: {err}"));
+                let message = format!(
+                    "Failed to get updates from {}: {err}",
+                    self.subject(&subscription)
+                );
+                self.subscription_failed(subscription, message);
             }
             Err(err) => error!("Subscription task failed: {err}"),
         }
@@ -545,9 +557,41 @@ impl Service {
 
     async fn subscribe_to_favorites(&mut self) {
         match self.household.subscribe(&Subscription::Favorites).await {
-            Ok(()) => self.favorites_subscribed = true,
-            Err(err) => self.report_error(format!("Failed to get updates to favorites: {err}")),
+            Ok(()) => {
+                self.favorites_subscribed = true;
+                self.failing.remove(&Subscription::Favorites);
+            }
+            Err(err) => self.subscription_failed(
+                Subscription::Favorites,
+                format!("Failed to get updates to favorites: {err}"),
+            ),
         }
+    }
+
+    /// Report that `subscription` failed with `message`, unless it already failed last time.
+    fn subscription_failed(&mut self, subscription: Subscription, message: String) {
+        if self.failing.insert(subscription) {
+            self.report_error(message);
+        } else {
+            warn!("{message}");
+        }
+    }
+
+    /// The group or the speaker `subscription` is for, to tell the user.
+    fn subject(&self, subscription: &Subscription) -> String {
+        let state = self.state_tx.borrow();
+        let name = match subscription {
+            Subscription::Playback(id)
+            | Subscription::PlaybackMetadata(id)
+            | Subscription::GroupVolume(id) => state.group(id).map(|g| g.name.clone()),
+            Subscription::PlayerVolume(id) => state
+                .players
+                .iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.name.clone()),
+            _ => None,
+        };
+        name.unwrap_or_else(|| "a speaker".to_owned())
     }
 
     async fn retry_subscriptions(&mut self) {
