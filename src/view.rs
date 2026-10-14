@@ -68,7 +68,7 @@ enum Mode {
     #[default]
     NowPlaying,
     /// The group panel, on the left, with the group at this index highlighted.
-    GroupPicker(usize),
+    GroupPicker(PanelHighlight),
     /// The group editor, in the panel on the left.
     GroupEditor(GroupEditor),
     /// The favorites picker, with the favorite at this index highlighted.
@@ -119,8 +119,8 @@ impl Selection {
 #[derive(Debug)]
 struct GroupEditor {
     group: GroupId,
-    /// The index of the highlighted speaker in [`HouseholdState::players`].
-    highlighted: usize,
+    /// The highlighted speaker, as an index in [`HouseholdState::players`].
+    highlight: PanelHighlight,
     /// The speakers to have in the group.
     members: HashSet<PlayerId>,
 }
@@ -135,9 +135,30 @@ impl GroupEditor {
             .unwrap_or(0);
         Self {
             group: group.id.clone(),
-            highlighted,
+            highlight: PanelHighlight::new(highlighted),
             members: group.player_ids.iter().cloned().collect(),
         }
+    }
+}
+
+/// The highlighted item of a list in the panel on the left, and the first one shown.
+#[derive(Debug, Clone, Copy)]
+struct PanelHighlight {
+    item: usize,
+    first: usize,
+}
+
+impl PanelHighlight {
+    fn new(item: usize) -> Self {
+        Self { item, first: 0 }
+    }
+
+    /// Scroll as little as possible for the highlighted item to be among the `shown` ones.
+    fn scroll(&mut self, shown: usize) {
+        self.first = self
+            .first
+            .min(self.item)
+            .max((self.item + 1).saturating_sub(shown));
     }
 }
 
@@ -164,11 +185,11 @@ impl UiState {
             .map(|(_, group)| state.members(group).count() + 1);
         match &mut self.mode {
             Mode::GroupPicker(_) if state.groups.is_empty() => self.mode = Mode::NowPlaying,
-            Mode::GroupPicker(highlighted) => clamp(highlighted, state.groups.len()),
+            Mode::GroupPicker(highlight) => clamp(&mut highlight.item, state.groups.len()),
             Mode::GroupEditor(editor) if state.group(&editor.group).is_none() => {
                 self.mode = Mode::NowPlaying;
             }
-            Mode::GroupEditor(editor) => clamp(&mut editor.highlighted, state.players.len()),
+            Mode::GroupEditor(editor) => clamp(&mut editor.highlight.item, state.players.len()),
             Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
                 Some(rows) => clamp(highlighted, rows),
@@ -255,7 +276,7 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
 pub fn render_ui(
     frame: &mut Frame,
     state: &HouseholdState,
-    ui: &UiState,
+    ui: &mut UiState,
     artwork: &mut Artwork,
     settings: &UiConfig,
     theme: &Theme,
@@ -286,16 +307,10 @@ pub fn render_ui(
             // than covering part of it.
             let fits = rest.width >= now_playing_width(group, symbols, theme);
             let panel = if fits { panel } else { body };
-            match &ui.mode {
-                Mode::GroupPicker(highlighted) => render_group_panel(
-                    state,
-                    symbols,
-                    theme,
-                    group_index,
-                    *highlighted,
-                    frame,
-                    panel,
-                ),
+            match &mut ui.mode {
+                Mode::GroupPicker(highlight) => {
+                    render_group_panel(state, symbols, theme, group_index, highlight, frame, panel)
+                }
                 Mode::GroupEditor(editor) => {
                     render_group_editor(state, symbols, theme, editor, frame, panel);
                 }
@@ -349,8 +364,8 @@ pub fn handle_input(
 ) -> Option<Request> {
     let command = match ui.mode {
         Mode::NowPlaying => handle_now_playing_input(input, state, ui),
-        Mode::GroupPicker(highlighted) => {
-            handle_group_picker_input(input, state, ui, highlighted);
+        Mode::GroupPicker(highlight) => {
+            handle_group_picker_input(input, state, ui, highlight);
             None
         }
         Mode::GroupEditor(_) => handle_group_editor_input(input, state, ui),
@@ -387,7 +402,7 @@ fn handle_now_playing_input(
         KeyCode::Char('f') => Mode::FavoritesPicker(0),
 
         // Group switching
-        KeyCode::Char('g') => Mode::GroupPicker(ui.current_group(state)?.0),
+        KeyCode::Char('g') => Mode::GroupPicker(PanelHighlight::new(ui.current_group(state)?.0)),
         KeyCode::Char('G') => {
             Mode::GroupEditor(GroupEditor::new(ui.current_group(state)?.1, state))
         }
@@ -472,20 +487,20 @@ fn handle_theme_picker_input(
 }
 
 /// Update `ui` according to the key pressed while the group picker is open, with the group at
-/// index `highlighted` highlighted.
+/// `highlight` highlighted.
 fn handle_group_picker_input(
     input: &KeyEvent,
     state: &HouseholdState,
     ui: &mut UiState,
-    highlighted: usize,
+    highlight: PanelHighlight,
 ) {
-    if let Some(highlighted) = navigate(input.code, highlighted, state.groups.len()) {
-        ui.mode = Mode::GroupPicker(highlighted);
+    if let Some(item) = navigate(input.code, highlight.item, state.groups.len()) {
+        ui.mode = Mode::GroupPicker(PanelHighlight { item, ..highlight });
         return;
     }
     match input.code {
         KeyCode::Enter => {
-            if let Some(group) = state.groups.get(highlighted) {
+            if let Some(group) = state.groups.get(highlight.item) {
                 ui.selected_group = Some(Selection::of(group));
             }
             ui.mode = Mode::NowPlaying;
@@ -506,13 +521,13 @@ fn handle_group_editor_input(
         return None;
     };
     let group = state.group(&editor.group)?;
-    if let Some(highlighted) = navigate(input.code, editor.highlighted, state.players.len()) {
-        editor.highlighted = highlighted;
+    if let Some(item) = navigate(input.code, editor.highlight.item, state.players.len()) {
+        editor.highlight.item = item;
         return None;
     }
     match input.code {
         KeyCode::Char(' ') => {
-            let player = state.players.get(editor.highlighted)?;
+            let player = state.players.get(editor.highlight.item)?;
             // The coordinator stays, so that the group keeps playing.
             if player.id != group.coordinator_id && !editor.members.remove(&player.id) {
                 editor.members.insert(player.id.clone());
@@ -1212,13 +1227,13 @@ fn render_favorites_picker(
 }
 
 /// A panel in `area` listing the groups and what they are playing, with the selected group (at
-/// `selected`) in colour and the one at `highlighted` highlighted.
+/// `selected`) in colour and the one at `highlight` highlighted.
 fn render_group_panel(
     state: &HouseholdState,
     symbols: &Symbols,
     theme: &Theme,
     selected: usize,
-    highlighted: usize,
+    highlight: &mut PanelHighlight,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -1235,12 +1250,12 @@ fn render_group_panel(
         " Groups ",
         GROUP_PANEL_HELP,
         items,
-        highlighted,
+        highlight,
     );
 }
 
 /// A panel titled `title` in `area`, listing `items` a line apart, scrolled so that the one at
-/// `highlighted` is shown, and highlighted, with the keys to use (`help`) at the bottom.
+/// `highlight` is shown, and highlighted, with the keys to use (`help`) at the bottom.
 fn render_panel<const N: usize>(
     frame: &mut Frame,
     theme: &Theme,
@@ -1248,7 +1263,7 @@ fn render_panel<const N: usize>(
     title: &str,
     help: &str,
     items: Vec<[Line; N]>,
-    highlighted: usize,
+    highlight: &mut PanelHighlight,
 ) {
     let help = Line::from(help)
         .centered()
@@ -1266,7 +1281,11 @@ fn render_panel<const N: usize>(
     // Items are a line apart, and scrolled so that the highlighted one is shown.
     let item_height = u16::try_from(N).unwrap_or(u16::MAX);
     let shown = usize::from((inner.height + 1) / (item_height + 1)).max(1);
-    let first = highlighted.saturating_sub(shown - 1);
+    highlight.scroll(shown);
+    let PanelHighlight {
+        item: highlighted,
+        first,
+    } = *highlight;
     let rows = (inner.y..).step_by(usize::from(item_height + 1));
     for ((i, lines), y) in items.into_iter().enumerate().skip(first).zip(rows) {
         let item_area = Rect {
@@ -1361,7 +1380,7 @@ fn render_group_editor(
     state: &HouseholdState,
     symbols: &Symbols,
     theme: &Theme,
-    editor: &GroupEditor,
+    editor: &mut GroupEditor,
     frame: &mut Frame,
     area: Rect,
 ) {
@@ -1380,7 +1399,7 @@ fn render_group_editor(
         " Group speakers ",
         GROUP_EDITOR_HELP,
         items,
-        editor.highlighted,
+        &mut editor.highlight,
     );
 }
 
@@ -1916,7 +1935,14 @@ mod tests {
             let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
             terminal
                 .draw(|f| {
-                    render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+                    render_ui(
+                        f,
+                        &state,
+                        &mut ui,
+                        &mut artwork,
+                        &settings,
+                        &Theme::TERMINAL,
+                    );
                 })
                 .unwrap();
             let screen: String = terminal
@@ -1945,7 +1971,14 @@ mod tests {
         let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
         terminal
             .draw(|f| {
-                render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+                render_ui(
+                    f,
+                    &state,
+                    &mut ui,
+                    &mut artwork,
+                    &settings,
+                    &Theme::TERMINAL,
+                );
             })
             .unwrap();
         let screen: String = terminal
@@ -1982,7 +2015,14 @@ mod tests {
         terminal
             .draw(|f| {
                 let settings = UiConfig::default();
-                render_ui(f, &state, &ui, &mut artwork, &settings, &Theme::TERMINAL);
+                render_ui(
+                    f,
+                    &state,
+                    &mut ui,
+                    &mut artwork,
+                    &settings,
+                    &Theme::TERMINAL,
+                );
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
@@ -2017,6 +2057,23 @@ mod tests {
             seen.push((modes.repeat, modes.repeat_one));
         }
         seen
+    }
+
+    #[test]
+    fn panel_scrolls_as_little_as_possible() {
+        let mut highlight = PanelHighlight::new(0);
+        let mut firsts = Vec::new();
+        for item in [0, 1, 2, 3, 4, 3, 2, 1, 0] {
+            highlight.item = item;
+            highlight.scroll(3);
+            firsts.push(highlight.first);
+        }
+        assert_eq!(firsts, [0, 0, 0, 1, 2, 2, 2, 1, 0]);
+
+        // Opening it on an item further down shows that item at the bottom.
+        let mut highlight = PanelHighlight::new(7);
+        highlight.scroll(3);
+        assert_eq!(highlight.first, 5);
     }
 
     #[test]

@@ -85,7 +85,14 @@ impl App {
             }
             let shown_theme = preview.as_ref().map_or(&theme, |(_, previewed)| previewed);
             terminal.draw(|f| {
-                view::render_ui(f, &state, &ui, &mut artwork, &self.ui_config, shown_theme)
+                view::render_ui(
+                    f,
+                    &state,
+                    &mut ui,
+                    &mut artwork,
+                    &self.ui_config,
+                    shown_theme,
+                )
             })?;
             let animated = view::is_animated(&state, &ui);
 
