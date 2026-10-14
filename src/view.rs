@@ -7,12 +7,13 @@ use clap::crate_version;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType::Rounded, Clear, Gauge, HighlightSpacing, List, ListState, Padding,
-        Paragraph, Wrap,
+        Paragraph, Widget, Wrap,
     },
 };
 use ratatui_image::{FilterType, Resize, StatefulImage};
@@ -20,7 +21,6 @@ use sinuous_client::{
     GroupId, PlayerId,
     playback::{PlayModes, PlayModesUpdate, PlaybackActions},
 };
-use tui_slider::{Slider, style::SliderStyle};
 use url::Url;
 
 use crate::artwork::Artwork;
@@ -1037,13 +1037,40 @@ fn render_volume(
 }
 
 /// A slider showing `volume`, if it is known.
-fn volume_slider(volume: Option<u8>, theme: &Theme) -> Slider<'static> {
-    Slider::new(f64::from(volume.unwrap_or(0).min(100)), 0.0, 100.0)
-        .style(&SliderStyle::default_style())
-        .filled_color(theme.slider)
-        .empty_color(theme.track)
-        .handle_color(theme.slider_handle)
-        .show_handle(volume.is_some())
+fn volume_slider(volume: Option<u8>, theme: &Theme) -> VolumeSlider<'_> {
+    VolumeSlider { volume, theme }
+}
+
+/// A horizontal slider showing a volume, with a handle if it is known.
+struct VolumeSlider<'a> {
+    volume: Option<u8>,
+    theme: &'a Theme,
+}
+
+impl Widget for VolumeSlider<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+        let y = area.y + area.height / 2;
+        // The handle goes from the first column to the last, and the bar is filled up to it, so
+        // that there is never a gap between them.
+        let volume = u32::from(self.volume.unwrap_or(0).min(100));
+        let handle = u16::try_from((u32::from(area.width - 1) * volume + 50) / 100).unwrap_or(0);
+        for x in 0..area.width {
+            let (symbol, color) = if x < handle {
+                ("━", self.theme.slider)
+            } else {
+                ("─", self.theme.track)
+            };
+            buf[(area.x + x, y)].set_symbol(symbol).set_fg(color);
+        }
+        if self.volume.is_some() {
+            buf[(area.x + handle, y)]
+                .set_symbol("●")
+                .set_fg(self.theme.slider_handle);
+        }
+    }
 }
 
 /// `volume`, right-aligned on 3 columns, or `--` if it isn't known.
@@ -1682,5 +1709,22 @@ mod tests {
             &mut ui,
         );
         assert!(ui.previewed_theme().is_none());
+    }
+
+    #[test]
+    fn volume_slider_handle_follows_bar() {
+        for width in 1..=40 {
+            let area = Rect::new(0, 0, width, 1);
+            for volume in 0..=100 {
+                let mut buf = Buffer::empty(area);
+                volume_slider(Some(volume), &Theme::TERMINAL).render(area, &mut buf);
+                let line: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+                let handle = line.find('●').expect("the handle is shown");
+                assert!(
+                    line[..handle].chars().all(|c| c == '━'),
+                    "{volume}% on {width} columns: {line}"
+                );
+            }
+        }
     }
 }
