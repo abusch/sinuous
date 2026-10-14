@@ -462,12 +462,6 @@ impl Service {
             }
             payload => {
                 let Some(id) = event.group_id else { return };
-                // Images served by the coordinator are given relative to it.
-                let coordinator_url = self
-                    .topology_rx
-                    .borrow()
-                    .coordinator(&id)
-                    .map(|p| p.websocket_url.clone());
                 self.state_tx.send_if_modified(|state| {
                     let Some(group) = state.groups.iter_mut().find(|g| g.id == id) else {
                         return false;
@@ -477,6 +471,12 @@ impl Service {
                             group.playback = Some(Playback::new(&status, Instant::now()));
                         }
                         EventPayload::MetadataStatus(metadata) => {
+                            // Images served by the coordinator are given relative to it.
+                            let coordinator_url = self
+                                .topology_rx
+                                .borrow()
+                                .coordinator(&id)
+                                .map(|p| p.websocket_url.clone());
                             let images = Images {
                                 coordinator_url: coordinator_url.as_ref(),
                                 fallback: metadata
