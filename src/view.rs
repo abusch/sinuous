@@ -90,8 +90,9 @@ pub enum Request {
 #[derive(Debug)]
 struct Selection {
     group: GroupId,
-    /// Its coordinator when it was last seen, to follow it if the group gets a new ID, e.g. when
-    /// its members change.
+    /// Its coordinator when it was last seen, to follow it into the group it joins if this one is
+    /// gone. A group keeps its ID when its members change, but a speaker leaving a group gets a
+    /// new one.
     coordinator: PlayerId,
 }
 
@@ -482,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_follows_the_coordinator_when_the_group_gets_a_new_id() {
+    fn selection_follows_its_coordinator_into_the_group_it_joins() {
         let mut state = household();
         let mut ui = UiState::default();
         ui.sync(&state);
@@ -493,36 +494,37 @@ mod tests {
         );
         assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen");
 
-        // The kitchen was grouped with the office, under a new ID.
-        state.groups = vec![
-            GroupState::new(
-                "bedroom".into(),
-                "Bedroom".to_owned(),
-                "b".into(),
-                vec!["b".into()],
-            ),
-            GroupState::new(
-                "kitchen:2".into(),
-                "Kitchen + Office".to_owned(),
-                "k".into(),
-                vec!["k".into(), "o".into()],
-            ),
-        ];
-        ui.sync(&state);
-        assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen + Office");
-
-        // The kitchen joined the bedroom.
+        // The kitchen joined the bedroom, e.g. from the Sonos app: its group is gone, and the group
+        // it joined keeps its ID.
         state.groups = vec![GroupState::new(
-            "bedroom:2".into(),
-            "Bedroom + Kitchen".to_owned(),
+            "bedroom".into(),
+            "Bedroom + Office + Kitchen".to_owned(),
             "b".into(),
-            vec!["b".into(), "k".into()],
+            vec!["b".into(), "o".into(), "k".into()],
         )];
         ui.sync(&state);
         assert_eq!(
             ui.current_group(&state).unwrap().1.name,
-            "Bedroom + Kitchen"
+            "Bedroom + Office + Kitchen"
         );
+
+        // The kitchen left again, getting a group with a new ID: the group shown stays.
+        state.groups = vec![
+            GroupState::new(
+                "bedroom".into(),
+                "Bedroom + Office".to_owned(),
+                "b".into(),
+                vec!["b".into(), "o".into()],
+            ),
+            GroupState::new(
+                "kitchen:2".into(),
+                "Kitchen".to_owned(),
+                "k".into(),
+                vec!["k".into()],
+            ),
+        ];
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + Office");
     }
 
     #[test]
