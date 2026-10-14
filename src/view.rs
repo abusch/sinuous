@@ -26,8 +26,8 @@ use url::Url;
 use crate::artwork::Artwork;
 use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{
-    Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction,
-    PlayerInfo, Source, TrackInfo,
+    Command, ErrorMessage, GroupAction, GroupState, HouseholdState, PlayerAction, PlayerInfo,
+    Source, TrackInfo,
 };
 use crate::symbols::Symbols;
 use crate::theme::{self, THEMES, Theme};
@@ -224,19 +224,6 @@ pub fn render_ui(
 ) {
     let symbols = Symbols::choose(settings.nerd_font);
     frame.render_widget(Block::new().style(theme.base()), frame.area());
-    match &state.status {
-        ConnectionStatus::Connecting => {
-            return render_message(frame, theme, "Connecting to your Sonos speakers...");
-        }
-        ConnectionStatus::Failed(err) => {
-            return render_message(
-                frame,
-                theme,
-                &format!("Failed to connect to your Sonos speakers: {err}\n\nPress q to quit."),
-            );
-        }
-        ConnectionStatus::Connected => {}
-    }
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, theme, "No speakers found.\n\nPress q to quit.");
     };
@@ -1815,8 +1802,7 @@ mod tests {
     fn group_panel_takes_the_place_of_what_is_playing_when_both_dont_fit() {
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut state = household();
-        state.status = ConnectionStatus::Connected;
+        let state = household();
         let mut ui = UiState::default();
         ui.sync(&state);
         press(&[KeyCode::Char('g')], &state, &mut ui);
@@ -1852,8 +1838,7 @@ mod tests {
     fn group_editor_is_a_panel_beside_what_is_playing() {
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut state = household();
-        state.status = ConnectionStatus::Connected;
+        let state = household();
         let mut ui = UiState::default();
         ui.sync(&state);
         press(&[KeyCode::Char('G')], &state, &mut ui);
@@ -1890,7 +1875,6 @@ mod tests {
         use ratatui::{Terminal, backend::TestBackend};
 
         let mut state = household();
-        state.status = ConnectionStatus::Connected;
         state.players[0].model = Some("Arc Ultra".to_owned());
         let mut ui = UiState::default();
         ui.sync(&state);

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{arg, command, value_parser};
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -11,11 +11,12 @@ mod artwork;
 mod config;
 mod input;
 mod sonos;
+mod spinner;
 mod symbols;
 mod theme;
 mod view;
 
-use crate::{app::App, config::Config};
+use crate::{app::App, config::Config, sonos::ProvidedDevices};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -52,7 +53,21 @@ async fn main() -> Result<()> {
         config.core.devices = devices.cloned().collect();
     }
 
-    let app = App::new(config, config_path.or_else(config::default_path));
+    // Connect before taking over the terminal, so that why we couldn't stays on screen.
+    let devices = ProvidedDevices::new(config.core.devices);
+    let household = spinner::spin(
+        "Connecting to your Sonos speakers...",
+        sonos::connect(devices),
+    )
+    .await
+    .context("Failed to connect to your Sonos speakers")
+    .inspect_err(|err| error!("{err:#}"))?;
+
+    let app = App::new(
+        household,
+        config.ui,
+        config_path.or_else(config::default_path),
+    );
     // Initialize the terminal user interface.
     let mut terminal = ratatui::init();
 

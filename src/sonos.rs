@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -44,10 +45,24 @@ pub struct ProvidedDevices {
     pub names: Vec<String>,
 }
 
+impl ProvidedDevices {
+    /// Sort out the speakers given as IPs from the ones given as names.
+    pub fn new(devices: impl IntoIterator<Item = String>) -> Self {
+        let mut provided = Self::default();
+        for device in devices {
+            if let Ok(ip) = Ipv4Addr::from_str(&device) {
+                provided.ips.push(ip);
+            } else {
+                provided.names.push(device);
+            }
+        }
+        provided
+    }
+}
+
 /// What the service knows about the household.
 #[derive(Debug, Clone, Default)]
 pub struct HouseholdState {
-    pub status: ConnectionStatus,
     /// Sorted by name.
     pub groups: Vec<GroupState>,
     /// Sorted by name.
@@ -67,14 +82,6 @@ impl HouseholdState {
             .iter()
             .filter(|p| group.player_ids.contains(&p.id))
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub enum ConnectionStatus {
-    #[default]
-    Connecting,
-    Connected,
-    Failed(String),
 }
 
 #[derive(Debug, Clone)]
@@ -293,8 +300,7 @@ pub struct SonosHandle {
 impl SonosHandle {
     /// Watch the state of the household.
     ///
-    /// The last state stays available once the service has stopped, e.g. after failing to
-    /// connect.
+    /// The last state stays available once the service has stopped.
     pub fn state(&self) -> watch::Receiver<HouseholdState> {
         self.state_rx.clone()
     }
@@ -309,25 +315,16 @@ impl SonosHandle {
 }
 
 /// Start the service in the background.
-pub fn spawn(devices: ProvidedDevices) -> SonosHandle {
+///
+/// The groups and speakers of the household are in the state right away.
+pub fn spawn(household: Household) -> SonosHandle {
     let (state_tx, state_rx) = watch::channel(HouseholdState::default());
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_SIZE);
 
-    tokio::spawn(async move {
-        let household = match connect_household(devices).await {
-            Ok(household) => household,
-            Err(err) => {
-                error!("Failed to connect: {err:#}");
-                state_tx.send_modify(|state| {
-                    state.status = ConnectionStatus::Failed(format!("{err:#}"));
-                });
-                return;
-            }
-        };
-
-        tokio::spawn(run_commands(household.clone(), cmd_rx, state_tx.clone()));
-        Service::new(household, state_tx).run().await;
-    });
+    tokio::spawn(run_commands(household.clone(), cmd_rx, state_tx.clone()));
+    let mut service = Service::new(household, state_tx);
+    service.update_groups();
+    tokio::spawn(service.run());
 
     SonosHandle { state_rx, cmd_tx }
 }
@@ -363,10 +360,6 @@ impl Service {
     }
 
     async fn run(mut self) {
-        self.update_groups();
-        self.state_tx.send_modify(|state| {
-            state.status = ConnectionStatus::Connected;
-        });
         // The favorites get loaded when the initial event arrives.
         self.subscribe_to_favorites().await;
 
@@ -665,7 +658,7 @@ async fn run_group_command(
 
 /// Connect to the household of one of the provided speakers, or of the first speaker discovered
 /// if none were provided.
-async fn connect_household(devices: ProvidedDevices) -> Result<Household> {
+pub async fn connect(devices: ProvidedDevices) -> Result<Household> {
     let ProvidedDevices { ips, names } = devices;
 
     debug!("Connecting to provided speakers...");

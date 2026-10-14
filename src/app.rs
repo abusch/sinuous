@@ -1,10 +1,11 @@
-use std::{net::Ipv4Addr, path::PathBuf, str::FromStr, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use crossterm::event::{Event, EventStream};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::{Picker, ProtocolType};
+use sinuous_client::Household;
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
@@ -13,9 +14,8 @@ use tracing::{debug, warn};
 
 use crate::{
     artwork::Artwork,
-    config::{self, Config, UiConfig, UiSetting},
-    input,
-    sonos::{self, ProvidedDevices},
+    config::{self, UiConfig, UiSetting},
+    input, sonos,
     theme::Theme,
     view::{self, Request, UiState},
 };
@@ -24,33 +24,24 @@ use crate::{
 const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct App {
-    devices: ProvidedDevices,
+    household: Household,
     ui_config: UiConfig,
     /// Where settings changed while running are saved, if known.
     config_path: Option<PathBuf>,
 }
 
 impl App {
-    pub fn new(config: Config, config_path: Option<PathBuf>) -> Self {
-        // Provided devices are given either as IPs or as names
-        let mut devices = ProvidedDevices::default();
-        for device in config.core.devices {
-            if let Ok(ip) = Ipv4Addr::from_str(&device) {
-                devices.ips.push(ip);
-            } else {
-                devices.names.push(device);
-            }
-        }
+    pub fn new(household: Household, ui_config: UiConfig, config_path: Option<PathBuf>) -> Self {
         App {
-            devices,
-            ui_config: config.ui,
+            household,
+            ui_config,
             config_path,
         }
     }
 
     pub async fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         // Background service handling all the Sonos stuff
-        let sonos = sonos::spawn(std::mem::take(&mut self.devices));
+        let sonos = sonos::spawn(self.household.clone());
         let mut state_rx = sonos.state();
         // Whether the service is still running, i.e. whether the state may still change.
         let mut service_running = true;
@@ -142,7 +133,7 @@ impl App {
                 _ = redraw.tick(), if animated => {}
                 changed = state_rx.changed(), if service_running => {
                     if changed.is_err() {
-                        // Keep displaying the last state, e.g. why we failed to connect.
+                        // Keep displaying the last state.
                         warn!("Sonos service has stopped");
                         service_running = false;
                     }
