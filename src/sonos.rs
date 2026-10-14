@@ -291,6 +291,42 @@ pub enum PlayerAction {
     AdjustVolume(i8),
 }
 
+impl Command {
+    /// Add `other` to this command if running both amounts to running one: changes of the volume
+    /// of the same group or player. Gives `other` back otherwise.
+    fn merge(&mut self, other: Command) -> Result<(), Command> {
+        match (self, other) {
+            (
+                Command::Group {
+                    group,
+                    action: GroupAction::AdjustVolume(delta),
+                },
+                Command::Group {
+                    group: other_group,
+                    action: GroupAction::AdjustVolume(other_delta),
+                },
+            ) if *group == other_group => {
+                *delta = delta.saturating_add(other_delta);
+                Ok(())
+            }
+            (
+                Command::Player {
+                    player,
+                    action: PlayerAction::AdjustVolume(delta),
+                },
+                Command::Player {
+                    player: other_player,
+                    action: PlayerAction::AdjustVolume(other_delta),
+                },
+            ) if *player == other_player => {
+                *delta = delta.saturating_add(other_delta);
+                Ok(())
+            }
+            (_, other) => Err(other),
+        }
+    }
+}
+
 /// The UI's side of the service.
 pub struct SonosHandle {
     state_rx: watch::Receiver<HouseholdState>,
@@ -630,7 +666,24 @@ async fn run_commands(
     mut cmd_rx: mpsc::Receiver<Command>,
     state_tx: watch::Sender<HouseholdState>,
 ) {
-    while let Some(command) = cmd_rx.recv().await {
+    // The command received while merging the previous ones, which couldn't be merged.
+    let mut next = None;
+    loop {
+        let mut command = match next.take() {
+            Some(command) => command,
+            None => match cmd_rx.recv().await {
+                Some(command) => command,
+                None => break,
+            },
+        };
+        // Catch up with the volume changes sent while the last command ran, e.g. while a key is
+        // held down, in one go.
+        while let Ok(queued) = cmd_rx.try_recv() {
+            if let Err(queued) = command.merge(queued) {
+                next = Some(queued);
+                break;
+            }
+        }
         debug!(?command, "Running command");
         if let Err(err) = run_command(&household, &command).await {
             report_error(&state_tx, format!("{err:#}"));
@@ -909,6 +962,47 @@ mod tests {
                 "{state:?}"
             );
         }
+    }
+
+    #[test]
+    fn only_volume_changes_of_the_same_target_are_merged() {
+        let group_volume = |group: &str, delta| Command::Group {
+            group: group.into(),
+            action: GroupAction::AdjustVolume(delta),
+        };
+        let player_volume = |player: &str, delta| Command::Player {
+            player: player.into(),
+            action: PlayerAction::AdjustVolume(delta),
+        };
+
+        let mut command = group_volume("kitchen", 1);
+        assert!(command.merge(group_volume("kitchen", 1)).is_ok());
+        assert!(command.merge(group_volume("kitchen", i8::MAX)).is_ok());
+        assert!(matches!(
+            command,
+            Command::Group {
+                action: GroupAction::AdjustVolume(i8::MAX),
+                ..
+            }
+        ));
+        assert!(command.merge(group_volume("office", 1)).is_err());
+        assert!(command.merge(player_volume("kitchen", 1)).is_err());
+        let play = Command::Group {
+            group: "kitchen".into(),
+            action: GroupAction::Play,
+        };
+        assert!(command.merge(play).is_err());
+
+        let mut command = player_volume("k", -1);
+        assert!(command.merge(player_volume("k", -1)).is_ok());
+        assert!(matches!(
+            command,
+            Command::Player {
+                action: PlayerAction::AdjustVolume(-2),
+                ..
+            }
+        ));
+        assert!(command.merge(player_volume("o", -1)).is_err());
     }
 
     #[test]
