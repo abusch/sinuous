@@ -71,13 +71,13 @@ async fn main() -> Result<()> {
     // Initialize the terminal user interface.
     let mut terminal = ratatui::init();
 
-    if let Err(err) = app.run(&mut terminal).await {
-        error!("Main loop exited with error: {}", err);
-    } else {
-        info!("Bye!");
-    }
+    let result = app.run(&mut terminal).await;
     ratatui::restore();
-    Ok(())
+    match &result {
+        Ok(()) => info!("Bye!"),
+        Err(err) => error!("Main loop exited with error: {err:#}"),
+    }
+    result
 }
 
 fn init_logger() -> WorkerGuard {
