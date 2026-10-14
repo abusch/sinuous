@@ -1,11 +1,12 @@
 //! Settings read from the configuration file.
 
 use std::{
+    ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use etcetera::BaseStrategy;
 use serde::Deserialize;
 use toml_edit::{DocumentMut, Item, Table, Value};
@@ -137,11 +138,33 @@ pub fn save(path: &Path, key: &str, value: impl Into<Value>) -> Result<()> {
     set_in(&mut document, key, value.into())
         .with_context(|| format!("Invalid configuration in {}", path.display()))?;
 
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+    write_atomically(path, &document.to_string())
+}
+
+/// Write `contents` to `path`, so that it has either its old or its new contents if writing fails
+/// half-way.
+fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+    // Replace the file a symbolic link points to, e.g. in a dotfiles repository, not the link.
+    let path = match fs::canonicalize(path) {
+        Ok(target) => target,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {}", path.display())),
+    };
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        bail!("{} isn't a file", path.display());
+    };
+    fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+
+    let mut temp_name = OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(".tmp");
+    let temp = dir.join(temp_name);
+    fs::write(&temp, contents).with_context(|| format!("Failed to write {}", temp.display()))?;
+    if let Err(err) = fs::rename(&temp, &path) {
+        let _ = fs::remove_file(&temp);
+        return Err(err).with_context(|| format!("Failed to replace {}", path.display()));
     }
-    fs::write(path, document.to_string())
-        .with_context(|| format!("Failed to write {}", path.display()))
+    Ok(())
 }
 
 /// Set the `key` setting to `value` in the `[ui]` table of `document`.
@@ -228,6 +251,37 @@ mod tests {
         assert_eq!(document.to_string(), "[ui]\nalbum_art = false\n");
         let config: Config = toml::from_str(&document.to_string()).unwrap();
         assert!(!config.ui.album_art);
+    }
+
+    #[test]
+    fn saves_through_symbolic_links() {
+        let dir = std::env::temp_dir().join(format!("sinuous-config-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("dotfiles.toml");
+        fs::write(&target, "[ui]\nnerd_font = true\n").unwrap();
+        let link = dir.join("config.toml");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(not(unix))]
+        fs::copy(&target, &link).unwrap();
+
+        save(&link, UiSetting::AlbumArt.key(), false).unwrap();
+
+        #[cfg(unix)]
+        {
+            assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+            assert_eq!(
+                fs::read_to_string(&target).unwrap(),
+                "[ui]\nnerd_font = true\nalbum_art = false\n"
+            );
+        }
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
