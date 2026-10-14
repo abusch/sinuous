@@ -538,8 +538,8 @@ fn handle_volume_mixer_input(
             ui.volume_mixer = None;
             return None;
         }
-        KeyCode::Left | KeyCode::Char('h' | '[') => -VOLUME_STEP,
-        KeyCode::Right | KeyCode::Char('l' | ']') => VOLUME_STEP,
+        KeyCode::Left | KeyCode::Char('[') => -VOLUME_STEP,
+        KeyCode::Right | KeyCode::Char(']') => VOLUME_STEP,
         _ => return None,
     };
     match highlighted.checked_sub(1) {
