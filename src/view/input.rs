@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use sinuous_client::{
     PlayerId,
     playback::{PlayModes, PlayModesUpdate, PlaybackActions},
@@ -34,6 +34,13 @@ pub fn handle_input(
     settings: &UiConfig,
     ui: &mut UiState,
 ) -> Option<Request> {
+    // q quits from the main screen, and closes what is open otherwise, like ESC.
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let input = match input.code {
+        KeyCode::Char('q') if matches!(ui.mode, Mode::NowPlaying) => return Some(Request::Quit),
+        KeyCode::Char('q') => &esc,
+        _ => input,
+    };
     let command = match ui.mode {
         Mode::NowPlaying => handle_now_playing_input(input, state, ui),
         Mode::GroupPicker(highlight) => {
@@ -560,6 +567,39 @@ mod tests {
         assert!(press(&[KeyCode::Char('c')], &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
         assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    #[test]
+    fn q_closes_what_is_open_then_quits() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        for opening in [',', 'v', 'f', 'g', 'G', '?'] {
+            assert!(press(&[KeyCode::Char(opening)], &state, &mut ui).is_none());
+            assert!(!matches!(ui.mode, Mode::NowPlaying), "{opening}");
+            assert!(press(&[KeyCode::Char('q')], &state, &mut ui).is_none());
+            assert!(matches!(ui.mode, Mode::NowPlaying), "{opening}");
+        }
+
+        // The theme picker closes back to the configuration dialog.
+        let mut keys = vec![KeyCode::Char(',')];
+        keys.extend(UiSetting::ALL.map(|_| KeyCode::Char('j')));
+        keys.extend([KeyCode::Enter, KeyCode::Char('q')]);
+        assert!(press(&keys, &state, &mut ui).is_none());
+        assert!(matches!(
+            ui.mode,
+            Mode::Config {
+                theme_picker: None,
+                ..
+            }
+        ));
+
+        press(&[KeyCode::Char('q')], &state, &mut ui);
+        assert!(matches!(
+            press(&[KeyCode::Char('q')], &state, &mut ui),
+            Some(Request::Quit)
+        ));
     }
 
     #[test]

@@ -9,7 +9,6 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 mod app;
 mod artwork;
 mod config;
-mod input;
 mod sonos;
 mod spinner;
 mod symbols;

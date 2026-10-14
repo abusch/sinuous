@@ -30,7 +30,7 @@ need to be on the same network (or visible from your current network).
 - <kbd>f</kbd>: Play one of your Sonos favorites
 - <kbd>,</kbd>: Change the settings
 - <kbd>?</kbd>: Show the keyboard shortcuts
-- <kbd>q</kbd>: Quit
+- <kbd>q</kbd>: Close what is open, or quit
 
 ## To run
 

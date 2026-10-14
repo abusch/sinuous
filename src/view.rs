@@ -84,6 +84,8 @@ pub enum Request {
     Toggle(UiSetting),
     /// Use the theme with this name, and save it.
     SetTheme(String),
+    /// Exit the app.
+    Quit,
 }
 
 /// The group the user is looking at.

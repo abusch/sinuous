@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 use crate::{
     artwork::Artwork,
     config::{self, UiConfig, UiSetting},
-    input, sonos,
+    sonos,
     theme::Theme,
     view::{self, Request, UiState},
 };
@@ -114,9 +114,6 @@ impl App {
                     if let Event::Key(key) = event
                         && key.kind == KeyEventKind::Press
                     {
-                        if input::should_quit(&event) {
-                            break;
-                        }
                         match view::handle_input(&key, &state, &self.ui_config, &mut ui) {
                             Some(Request::Speakers(command)) => sonos.send(command),
                             Some(Request::Toggle(setting)) => self.toggle(setting, &mut ui),
@@ -127,6 +124,7 @@ impl App {
                                     self.ui_config.theme = name;
                                 }
                             }
+                            Some(Request::Quit) => break,
                             None => {}
                         }
                     }
