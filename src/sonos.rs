@@ -202,8 +202,7 @@ impl Playback {
 pub struct TrackInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
-    pub album: Option<String>,
-    /// Whether the album is tagged explicit. Tracks have no tags of their own.
+    /// Whether its album is tagged explicit. Tracks have no tags of their own.
     pub album_explicit: bool,
     pub duration_secs: Option<u32>,
     /// The album art, or another picture of what is playing.
@@ -225,7 +224,6 @@ impl TrackInfo {
         Some(Self {
             title: track.name.clone(),
             artist: artist.map(|a| a.name.clone()),
-            album: track.album.as_ref().map(|a| a.name.clone()),
             album_explicit: track
                 .album
                 .as_ref()

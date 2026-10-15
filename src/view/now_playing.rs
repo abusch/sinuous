@@ -52,7 +52,7 @@ pub(super) fn render_now_playing(
 ) {
     // Everything but the album art: source, track information, progress, controls, volume and
     // next track, with the gaps between them.
-    const DETAILS_HEIGHT: u16 = 13;
+    const DETAILS_HEIGHT: u16 = 12;
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
 
@@ -89,7 +89,7 @@ pub(super) fn render_now_playing(
         Constraint::Length(if art_height > 0 { 1 } else { 0 }),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(3),
+        Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -131,20 +131,16 @@ pub(super) fn render_now_playing(
     // Track information
     let info = match &group.now_playing {
         Some(track) => vec![
-            Line::styled(
-                track.title.as_deref().unwrap_or("Unknown title"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            title_line(track, theme),
             Line::styled(
                 track.artist.as_deref().unwrap_or("Unknown artist"),
                 Style::default().fg(theme.artist),
             ),
-            album_line(track, theme),
         ],
-        None => vec![
-            Line::default(),
-            Line::styled("Nothing playing", Style::default().fg(theme.muted)),
-        ],
+        None => vec![Line::styled(
+            "Nothing playing",
+            Style::default().fg(theme.muted),
+        )],
     };
     frame.render_widget(Paragraph::new(info).centered(), info_area);
 
@@ -252,13 +248,11 @@ fn source_line<'a>(source: &'a Source, theme: &Theme) -> Line<'a> {
     Line::from(spans)
 }
 
-/// The album of `track`, with a badge if it is explicit.
-fn album_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
+/// The title of `track`, with a badge if it is explicit.
+fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
     let mut spans = vec![Span::styled(
-        track.album.as_deref().unwrap_or("Unknown album"),
-        Style::default()
-            .fg(theme.muted)
-            .add_modifier(Modifier::ITALIC),
+        track.title.as_deref().unwrap_or("Unknown title"),
+        Style::default().add_modifier(Modifier::BOLD),
     )];
     if track.album_explicit {
         spans.push(Span::raw(" "));
