@@ -39,6 +39,8 @@ jobs:
     if: github.repository_owner == 'abusch'
     runs-on: ${{ matrix.os }}
     strategy:
+      # Attach whatever binaries can be built, rather than none.
+      fail-fast: false
       matrix:
         include:
           - target: aarch64-unknown-linux-gnu
