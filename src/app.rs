@@ -13,7 +13,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
-    artwork::Artwork,
+    artwork::{Artwork, DiskCache},
     config::{self, UiConfig, UiSetting},
     sonos,
     theme::Theme,
@@ -28,14 +28,22 @@ pub struct App {
     ui_config: UiConfig,
     /// Where settings changed while running are saved, if known.
     config_path: Option<PathBuf>,
+    /// Where fetched album art is kept, if anywhere.
+    disk_cache: Option<DiskCache>,
 }
 
 impl App {
-    pub fn new(household: Household, ui_config: UiConfig, config_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        household: Household,
+        ui_config: UiConfig,
+        config_path: Option<PathBuf>,
+        disk_cache: Option<DiskCache>,
+    ) -> Self {
         App {
             household,
             ui_config,
             config_path,
+            disk_cache,
         }
     }
 
@@ -54,7 +62,7 @@ impl App {
         } else {
             Picker::halfblocks()
         };
-        let (mut artwork, mut loaded_rx) = Artwork::new(picker);
+        let (mut artwork, mut loaded_rx) = Artwork::new(picker, self.disk_cache.take());
 
         let mut ui = UiState::default();
         let mut theme = Theme::named(&self.ui_config.theme).unwrap_or_else(|| {

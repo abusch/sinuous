@@ -544,7 +544,7 @@ mod tests {
             (GROUP_PANEL_MIN_WIDTH + needed - 1, false),
         ] {
             let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
-            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
             terminal
                 .draw(|f| {
                     render_ui(
@@ -582,7 +582,7 @@ mod tests {
                 ..UiConfig::default()
             };
             let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
-            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
             terminal
                 .draw(|f| {
                     render_ui(
@@ -616,7 +616,7 @@ mod tests {
 
         let settings = UiConfig::default();
         let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
-        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
         terminal
             .draw(|f| {
                 render_ui(
@@ -659,7 +659,7 @@ mod tests {
         press(&[KeyCode::Char('v')], &state, &mut ui);
 
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
         terminal
             .draw(|f| {
                 let settings = UiConfig::default();

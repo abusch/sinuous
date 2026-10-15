@@ -21,12 +21,23 @@ pub struct Config {
     pub ui: UiConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CoreConfig {
     /// The speakers to connect to, as IPv4 addresses or names. Speakers are discovered via SSDP
     /// if empty.
     pub devices: Vec<String>,
+    /// How much space, in MiB, the album art kept on disk may take. 0 disables the disk cache.
+    pub album_art_cache_size: u64,
+}
+
+impl Default for CoreConfig {
+    fn default() -> Self {
+        Self {
+            devices: Vec::new(),
+            album_art_cache_size: 64,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +216,7 @@ mod tests {
     fn empty_file_gives_defaults() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.core.devices.is_empty());
+        assert_eq!(config.core.album_art_cache_size, 64);
         assert!(config.ui.album_art);
         assert!(!config.ui.nerd_font);
         assert_eq!(config.ui.theme, theme::TERMINAL);
@@ -216,6 +228,7 @@ mod tests {
             r#"
             [core]
             devices = ["192.168.1.10", "Living Room"]
+            album_art_cache_size = 0
 
             [ui]
             album_art = false
@@ -225,6 +238,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.core.devices, ["192.168.1.10", "Living Room"]);
+        assert_eq!(config.core.album_art_cache_size, 0);
         assert!(!config.ui.album_art);
         assert!(config.ui.nerd_font);
         assert_eq!(config.ui.theme, "nord");

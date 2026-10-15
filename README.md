@@ -17,7 +17,9 @@ local network.
 - Group and ungroup speakers
 - Play your Sonos favorites
 - Album art, drawn with the Kitty, iTerm2 or Sixel graphics protocols in
-  terminals that support one of them, and with coloured blocks otherwise
+  terminals that support one of them, and with coloured blocks otherwise. It is
+  kept in `~/.cache/sinuous/artwork` (or `$XDG_CACHE_HOME/sinuous/artwork`, or
+  `%LOCALAPPDATA%\sinuous\artwork` on Windows), up to `album_art_cache_size`
 - Themes, and icons for terminals using a [Nerd Font](https://www.nerdfonts.com)
 
 Sinuous talks to the speakers directly, through their local websocket API (using
@@ -81,6 +83,9 @@ running by pressing <kbd>,</kbd>, which saves them to the file:
 # The speakers to connect to, as IPv4 addresses or names. Speakers are
 # discovered via SSDP if not set. `--device` overrides this.
 devices = ["192.168.1.10", "Living Room"]
+# How much space, in MiB, the album art kept on disk may take, the least
+# recently shown being removed first. 0 disables the disk cache.
+album_art_cache_size = 64
 
 [ui]
 # Whether to show the album art of the current track.

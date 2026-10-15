@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         household,
         config.ui,
         config_path.or_else(config::default_path),
+        artwork::disk_cache(config.core.album_art_cache_size),
     );
     // Initialize the terminal user interface.
     let mut terminal = ratatui::init();
