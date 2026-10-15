@@ -18,6 +18,16 @@ pub struct Symbols {
     pub repeat_one: &'static str,
     pub crossfade: &'static str,
 
+    // Kinds of sources, e.g. a group playing an album
+    pub album: &'static str,
+    pub artist: &'static str,
+    pub playlist: &'static str,
+    pub radio: &'static str,
+    pub podcast: &'static str,
+    pub line_in: &'static str,
+    /// Between the kind of a source and its name.
+    pub source_kind_separator: &'static str,
+
     // Actions
     pub next: &'static str,
     pub previous: &'static str,
@@ -53,6 +63,13 @@ impl Symbols {
         repeat: "repeat",
         repeat_one: "repeat one",
         crossfade: "crossfade",
+        album: "Album",
+        artist: "Artist",
+        playlist: "Playlist",
+        radio: "Radio",
+        podcast: "Podcast",
+        line_in: "Line-in",
+        source_kind_separator: " · ",
         next: "next",
         previous: "prev",
         playing_on: "Playing on",
@@ -69,16 +86,23 @@ impl Symbols {
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
     const NERD_FONT: Self = Self {
-        playing: "\u{f040a}",           // nf-md-play
-        paused: "\u{f03e4}",            // nf-md-pause
-        volume_off: "\u{f0581}",        // nf-md-volume_off
-        volume_low: "\u{f057f}",        // nf-md-volume_low
-        volume_medium: "\u{f0580}",     // nf-md-volume_medium
-        volume_high: "\u{f057e}",       // nf-md-volume_high
-        shuffle: "\u{f049f}",           // nf-md-shuffle_variant
-        repeat: "\u{f0456}",            // nf-md-repeat
-        repeat_one: "\u{f0458}",        // nf-md-repeat_once
-        crossfade: "\u{f0915}",         // nf-md-transition
+        playing: "\u{f040a}",       // nf-md-play
+        paused: "\u{f03e4}",        // nf-md-pause
+        volume_off: "\u{f0581}",    // nf-md-volume_off
+        volume_low: "\u{f057f}",    // nf-md-volume_low
+        volume_medium: "\u{f0580}", // nf-md-volume_medium
+        volume_high: "\u{f057e}",   // nf-md-volume_high
+        shuffle: "\u{f049f}",       // nf-md-shuffle_variant
+        repeat: "\u{f0456}",        // nf-md-repeat
+        repeat_one: "\u{f0458}",    // nf-md-repeat_once
+        crossfade: "\u{f0915}",     // nf-md-transition
+        album: "\u{f0025}",         // nf-md-album
+        artist: "\u{f0803}",        // nf-md-account_music
+        playlist: "\u{f0cb8}",      // nf-md-playlist_music
+        radio: "\u{f0439}",         // nf-md-radio
+        podcast: "\u{f0994}",       // nf-md-podcast
+        line_in: "\u{f186b}",       // nf-md-audio_input_rca
+        source_kind_separator: " ",
         next: "\u{f04ad}",              // nf-md-skip_next
         previous: "\u{f04ae}",          // nf-md-skip_previous
         playing_on: "\u{f04c3}",        // nf-md-speaker

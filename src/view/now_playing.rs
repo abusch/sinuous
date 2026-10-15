@@ -123,7 +123,7 @@ pub(super) fn render_now_playing(
 
     if let Some(source) = &group.source {
         frame.render_widget(
-            Paragraph::new(source_line(source, theme)).centered(),
+            Paragraph::new(source_line(source, symbols, theme)).centered(),
             source_area,
         );
     }
@@ -221,29 +221,39 @@ pub(super) fn now_playing_width(group: &GroupState, symbols: &Symbols, theme: &T
     volume.max(bar + 2 * (TIME_WIDTH + 1))
 }
 
-/// Where the music comes from, e.g. `Spotify · Album · Altered State`.
-fn source_line<'a>(source: &'a Source, theme: &Theme) -> Line<'a> {
+/// Where the music comes from, e.g. `Spotify · Album · Altered State`, or `Spotify · 󰀥 Altered
+/// State` with icons.
+fn source_line<'a>(source: &'a Source, symbols: &Symbols, theme: &Theme) -> Line<'a> {
     let kind = source.kind.as_deref().and_then(|kind| match kind {
-        "album" => Some("Album"),
-        "artist" => Some("Artist"),
-        "playlist" => Some("Playlist"),
-        "station" | "program" => Some("Radio"),
-        "show" | "podcast" => Some("Podcast"),
-        kind if kind.starts_with("linein") => Some("Line-in"),
+        "album" => Some(symbols.album),
+        "artist" => Some(symbols.artist),
+        "playlist" => Some(symbols.playlist),
+        "station" | "program" => Some(symbols.radio),
+        "show" | "podcast" => Some(symbols.podcast),
+        kind if kind.starts_with("linein") => Some(symbols.line_in),
         _ => None,
     });
-    let parts = [source.service.as_deref(), kind, source.name.as_deref()];
+    let separator = Span::styled(" · ", Style::default().fg(theme.muted));
     let mut spans = Vec::new();
-    for (i, part) in parts.into_iter().flatten().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(theme.muted)));
+    if let Some(service) = &source.service {
+        spans.push(Span::styled(
+            service.as_str(),
+            Style::default().fg(theme.name),
+        ));
+    }
+    if let Some(kind) = kind {
+        if !spans.is_empty() {
+            spans.push(separator.clone());
         }
-        let style = if i == 0 {
-            Style::default().fg(theme.name)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(part, style));
+        spans.push(Span::raw(kind));
+    }
+    if let Some(name) = &source.name {
+        match kind {
+            Some(_) => spans.push(Span::styled(symbols.source_kind_separator, separator.style)),
+            None if !spans.is_empty() => spans.push(separator),
+            None => {}
+        }
+        spans.push(Span::raw(name.as_str()));
     }
     Line::from(spans)
 }
@@ -485,6 +495,27 @@ mod tests {
         for (y, row) in rows.iter().enumerate() {
             assert_eq!(row, if y == 4 { &middle } else { &square }, "{y}");
         }
+    }
+
+    #[test]
+    fn source_kind_is_a_label_or_an_icon() {
+        let source = Source {
+            service: Some("Spotify".to_owned()),
+            kind: Some("playlist".to_owned()),
+            name: Some("Chill".to_owned()),
+        };
+        let line = |nerd_font| {
+            source_line(&source, Symbols::choose(nerd_font), &Theme::TERMINAL).to_string()
+        };
+        assert_eq!(line(false), "Spotify · Playlist · Chill");
+        assert_eq!(line(true), "Spotify · \u{f0cb8} Chill");
+
+        let unknown_kind = Source {
+            kind: Some("mystery".to_owned()),
+            ..source.clone()
+        };
+        let line = source_line(&unknown_kind, Symbols::choose(true), &Theme::TERMINAL);
+        assert_eq!(line.to_string(), "Spotify · Chill");
     }
 
     #[test]
