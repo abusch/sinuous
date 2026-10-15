@@ -26,8 +26,8 @@ const MIN_VOLUME_WIDTH: u16 = 44;
 /// so that the slider is centred.
 const VOLUME_SIDE_WIDTH: u16 = 3;
 
-/// How wide the times on each side of the progress bar can be, e.g. `59:59`.
-const TIME_WIDTH: u16 = 5;
+/// How wide the times on each side of the progress bar can be, e.g. `-59:59`.
+const TIME_WIDTH: u16 = 6;
 
 /// What to show where the album art goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,7 +316,7 @@ fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'
 }
 
 /// A bar showing how far into the current track `group` is in `bar_area`, between the elapsed and
-/// total times, in the rest of `area`.
+/// remaining times, in the rest of `area`.
 fn render_progress(
     group: &GroupState,
     theme: &Theme,
@@ -353,10 +353,10 @@ fn render_progress(
         width: bar_area.x.saturating_sub(area.x + 1),
         ..area
     };
-    let duration_x = bar_area.right() + 1;
-    let duration_area = Rect {
-        x: duration_x,
-        width: area.right().saturating_sub(duration_x),
+    let remaining_x = bar_area.right() + 1;
+    let remaining_area = Rect {
+        x: remaining_x,
+        width: area.right().saturating_sub(remaining_x),
         ..area
     };
 
@@ -372,7 +372,19 @@ fn render_progress(
         elapsed_area,
     );
     frame.render_widget(bar, bar_area);
-    frame.render_widget(Paragraph::new(format_duration(duration)), duration_area);
+    frame.render_widget(
+        Paragraph::new(remaining_time(elapsed, duration)),
+        remaining_area,
+    );
+}
+
+/// The time left in a track lasting `duration` seconds, `elapsed` seconds into it, e.g. `-3:07`,
+/// or nothing if its duration isn't known, e.g. for radio.
+fn remaining_time(elapsed: u32, duration: u32) -> String {
+    if duration == 0 {
+        return String::new();
+    }
+    format!("-{}", format_duration(duration.saturating_sub(elapsed)))
 }
 
 /// The volume of `group`, as a slider between an icon showing its level and its value.
@@ -516,6 +528,15 @@ mod tests {
         };
         let line = source_line(&unknown_kind, Symbols::choose(true), &Theme::TERMINAL);
         assert_eq!(line.to_string(), "\u{f04c7} Spotify · Chill");
+    }
+
+    #[test]
+    fn remaining_time_counts_down_to_the_end_of_the_track() {
+        assert_eq!(remaining_time(0, 432), "-7:12");
+        assert_eq!(remaining_time(425, 432), "-0:07");
+        assert_eq!(remaining_time(432, 432), "-0:00");
+        // Unknown duration, e.g. radio
+        assert_eq!(remaining_time(65, 0), "");
     }
 
     #[test]
