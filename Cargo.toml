@@ -8,7 +8,7 @@ repository = "https://github.com/abusch/sinuous.git"
 license = "MIT"
 keywords = ["music", "sonos", "speakers", "terminal", "tui"]
 categories = ["command-line-utilities"]
-exclude = [".github/", "assets/", "release-plz.toml", "scripts/"]
+exclude = [".github/", "assets/", "release-plz.toml"]
 
 [dependencies]
 anyhow = "1.0.57"
