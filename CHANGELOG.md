@@ -2,6 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0](https://github.com/abusch/sinuous/compare/v0.1.6...v0.2.0) - 2026-10-15
+
+### Added
+
+- Show the time remaining in the current track rather than its duration, like the Sonos apps
+- Show the icon of the music service before its name when icons are enabled
+- Show the kind of source as an icon when icons are enabled
+- Don't show the album of the current track: its source is usually more relevant
+- Show a placeholder where the album art goes when there is none to show
+- Close what is open with q, rather than quitting
+- Adjust the volume with h and l in the volume mixer again, and show the help with ? only
+- Merge the volume changes waiting to run, so that holding a key doesn't fill the command queue
+- Adjust the volume in steps of 1
+- Connect to the speakers before starting the UI, with a spinner in the terminal
+- Show the model of each speaker in the group editor and the volume mixer
+- Edit the speakers of a group in the panel on the left, like the groups
+- Show the groups in a panel on the left, with what they are playing
+- Support themes
+- Move the shortcuts to the header, with help and configuration popups
+- Show volumes as sliders, and line the progress bar up with them
+- Optionally show Nerd Font icons instead of labels
+- Add a configuration file
+- Show album art
+- Grey out the actions the current source doesn't support
+- Show the source, play modes and explicit tag of the current track
+- Replace the queue and favorites with a bigger now playing view
+- Adjust the volume of individual speakers
+- Support grouping and ungrouping speakers
+- Switch groups with a picker instead of tabs
+- Use events instead of polling for playback updates
+- Connect to the first speaker that answers discovery
+- Replace sonor with sinuous-client
+
+### Fixed
+
+- Scroll the panel on the left as little as possible, rather than keeping the highlighted item at the bottom
+- Save the configuration file atomically
+- Don't turn the volume down with h in the volume mixer, which is the key for help
+- Don't panic lining up the theme with the settings if its icon is wider
+- Don't keep room for album art that failed to load
+- Report failed updates from a speaker once, naming it, rather than at every retry
+- Only act on key presses, not on releases
+- Show why the app stopped after restoring the terminal
+- Follow the selected group's coordinator into the group it joins
+- Keep the volume slider's handle at the end of its bar
+
+### Other
+
+- Remove the old release hook: release-plz writes the changelog
+- Refresh the README and its screenshot for 0.2.0
+- Describe the crate for crates.io, and only package what is needed to build it
+- Build the release binaries once release-plz has created the release
+- Bump the minor version for new features while sinuous is below 1.0
+- Describe how the selected group is followed as real speakers behave
+- Tick off customizing colours, now that themes are supported
+- Split the view into modules for input, what is playing, the panel and the popups
+- Keep what is open in one enum, rather than in fields that could all be set
+- Work out the command for a key and whether it is supported in one match
+- Only look up the coordinator of a group for the events that need it
+- Build track information in one place, and only find the image of the current track
+- Simplify how the previewed theme is kept
+- Update dependencies
+- Rely on sinuous-client to restore subscriptions
+- Upgrade sinuous-client to 0.2.0
+- Move UI state out of the Sonos service
+- Use sinuous-client from crates.io
+- Remove unused dependencies
+- *(deps)* bump clap from 4.5.54 to 4.6.0
+
 ## [0.1.6](https://github.com/abusch/sinuous/compare/v0.1.5...v0.1.6) - 2026-01-20
 
 ### Added

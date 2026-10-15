@@ -1,6 +1,6 @@
 [package]
 name = "sinuous"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2024"
 description = "A simple TUI for controlling local Sonos speakers"
 homepage = "https://github.com/abusch/sinuous"
