@@ -1,44 +1,72 @@
 # Sinuous
 
+[![crates.io](https://img.shields.io/crates/v/sinuous.svg)](https://crates.io/crates/sinuous)
 [![dependency status](https://deps.rs/repo/github/abusch/sinuous/status.svg)](https://deps.rs/repo/github/abusch/sinuous)
 [![CI](https://github.com/abusch/sinuous/actions/workflows/rust.yml/badge.svg)](https://github.com/abusch/sinuous/actions/workflows/rust.yml)
 
-Sinuous is a simple TUI for controlling local Sonos speakers.
+Sinuous is a terminal user interface for controlling the Sonos speakers on your
+local network.
 
-It currently allows you to switch between the different groups (zone players)
-from a panel showing what each of them is playing, displays the current and next
-tracks with their album art, and lets you play your Sonos favorites.
+![screenshot](assets/screenshot.png)
 
-Album art is drawn with the Kitty, iTerm2 or Sixel graphics protocols in
-terminals that support one of them, and with coloured blocks otherwise.
+## Features
 
-Note: `sinuous` directly talks to the Sonos speakers via their local websocket
-API (using [sinuous-client](https://github.com/abusch/sinuous-client)), and the
-speakers are discovered via the SSDP protocol. This means your Sonos speakers
-need to be on the same network (or visible from your current network).
+- See what each group of speakers is playing, and switch between them
+- Play, pause and skip tracks, and toggle shuffle, repeat and crossfade
+- Adjust the volume of a group, or of each of its speakers
+- Group and ungroup speakers
+- Play your Sonos favorites
+- Album art, drawn with the Kitty, iTerm2 or Sixel graphics protocols in
+  terminals that support one of them, and with coloured blocks otherwise
+- Themes, and icons for terminals using a [Nerd Font](https://www.nerdfonts.com)
 
-## Key bindings
+Sinuous talks to the speakers directly, through their local websocket API (using
+[sinuous-client](https://github.com/abusch/sinuous-client)), and finds them with
+SSDP: no Sonos account is needed, but the speakers need to be on the same
+network as your computer.
 
-- <kbd>Space</kbd>: Play / Pause
-- <kbd>p</kbd> / <kbd>n</kbd>: Skip to previous / next track
-- <kbd>s</kbd> / <kbd>r</kbd> / <kbd>c</kbd>: Toggle shuffle / repeat (all, one, off) / crossfade
-- <kbd>[</kbd> / <kbd>]</kbd>: Adjust volume of the current group
-- <kbd>v</kbd>: Adjust the volume of the current group or of each of its speakers
-- <kbd>g</kbd>: Switch to another group, from a panel showing what each group is playing
-- <kbd>G</kbd>: Add speakers to / remove speakers from the current group, from a
-  panel showing which group each speaker is in
-- <kbd>f</kbd>: Play one of your Sonos favorites
-- <kbd>,</kbd>: Change the settings
-- <kbd>?</kbd>: Show the keyboard shortcuts
-- <kbd>q</kbd>: Close what is open, or quit
+## Installation
 
-## To run
+Download the binary for your platform from the
+[releases page](https://github.com/abusch/sinuous/releases), or install it with
+[Cargo](https://rustup.rs):
 
-Install a recent Rust toolchain via [rustup](https://rustup.rs), if you don't
-already have one, then simply run `cargo run`.
+```sh
+cargo install sinuous
+```
 
-To get debug logs, run `RUST_LOG="sinuous=debug" cargo run`. The logs can be
-found in `/tmp/sinuous.log`.
+## Usage
+
+Run `sinuous`. It connects to the first speaker it finds on the network, and
+lets you control all the speakers of its household.
+
+To connect to particular speakers, give them with `--device`, separated by
+commas. IPv4 addresses work even when the speakers can't be discovered, e.g.
+because they are on another network. Names pick the household to control when
+several are discovered:
+
+```sh
+sinuous --device 192.168.1.10
+sinuous --device "Living Room"
+```
+
+### Key bindings
+
+| Key | Action |
+| --- | --- |
+| <kbd>Space</kbd> | Play / pause |
+| <kbd>p</kbd> / <kbd>n</kbd> | Previous / next track |
+| <kbd>s</kbd> / <kbd>r</kbd> / <kbd>c</kbd> | Toggle shuffle / cycle repeat (all, one, off) / toggle crossfade |
+| <kbd>[</kbd> / <kbd>]</kbd> | Volume of the group down / up |
+| <kbd>v</kbd> | Volume of the group and of each of its speakers |
+| <kbd>g</kbd> | Switch to another group, from a panel showing what each group is playing |
+| <kbd>G</kbd> | Add speakers to or remove speakers from the group |
+| <kbd>f</kbd> | Play one of your Sonos favorites |
+| <kbd>,</kbd> | Settings |
+| <kbd>?</kbd> | Keyboard shortcuts |
+| <kbd>q</kbd> | Close what is open, or quit |
+
+Panels and popups show the keys to use in them at their bottom.
 
 ## Configuration
 
@@ -75,16 +103,18 @@ nerd_font = false
 theme = "terminal"
 ```
 
-## Screenshot
+## Troubleshooting
 
-![screenshot](assets/screenshot.png)
+To get debug logs, run `RUST_LOG=sinuous=debug sinuous`. The logs are written
+to `sinuous.log` in the temporary directory: `$TMPDIR` on macOS, `/tmp` on
+Linux, and `%TEMP%` on Windows.
 
-## Todo
+## Ideas
 
-- [x] Allow switching between speakers
-- [ ] Support more actions (seek forward, backward, change playing mode, volume...)
-- [x] Display play/pause indicator as well as current play mode (shuffle+repeat)
-- [ ] Allow searching for tracks and modify the queue
-- [x] Allow customizing colours
-- [x] Allow specifying speaker to connect to as a command line argument
-- [x] Handle grouping of speakers
+- [ ] Seek forward and backward
+- [ ] Search for tracks, and manage the queue
+- [ ] Show more information about the current track
+
+## License
+
+[MIT](LICENSE)
