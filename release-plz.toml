@@ -1,0 +1,4 @@
+[workspace]
+# Release new features as 0.x.0 rather than 0.x.y: it's an application, so its users care more about
+# what's new than about Cargo's SemVer rules for 0.x libraries.
+features_always_increment_minor = true
