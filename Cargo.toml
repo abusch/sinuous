@@ -6,6 +6,9 @@ description = "A simple TUI for controlling local Sonos speakers"
 homepage = "https://github.com/abusch/sinuous"
 repository = "https://github.com/abusch/sinuous.git"
 license = "MIT"
+keywords = ["music", "sonos", "speakers", "terminal", "tui"]
+categories = ["command-line-utilities"]
+exclude = [".github/", "assets/", "release-plz.toml", "scripts/"]
 
 [dependencies]
 anyhow = "1.0.57"
