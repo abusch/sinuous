@@ -1,11 +1,24 @@
-name: CD # Continuous Deployment
+name: Release binaries
+
+# Builds the binaries of a release, and attaches them to it.
+on:
+  # From release-plz.yml, once it has created a release: GitHub doesn't run workflows for releases
+  # made with GITHUB_TOKEN, so this can't be triggered by the release itself.
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  # To build the binaries of an existing release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag of the release, e.g. v0.2.0
+        type: string
+        required: true
 
 permissions:
   contents: write
-
-on:
-  release:
-    types: [published]
 
 env:
   CARGO_INCREMENTAL: 0
@@ -23,7 +36,7 @@ defaults:
 jobs:
   upload-assets:
     name: ${{ matrix.target }}
-    if: github.repository_owner == 'abusch' && startsWith(github.event.release.name, 'sinuous-v')
+    if: github.repository_owner == 'abusch'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -33,7 +46,7 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04
           - target: aarch64-apple-darwin
-            os: macos-13
+            os: macos-15
           - target: aarch64-pc-windows-msvc
             os: windows-2022
           - target: x86_64-unknown-linux-gnu
@@ -41,7 +54,7 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-24.04
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15
           - target: x86_64-pc-windows-msvc
             os: windows-2022
           - target: x86_64-unknown-freebsd
@@ -50,6 +63,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/setup-cross-toolchain-action@v1
@@ -68,4 +83,5 @@ jobs:
           target: ${{ matrix.target }}
           tar: all
           zip: windows
+          ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}

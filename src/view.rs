@@ -1,85 +1,253 @@
-use std::time::{Duration, Instant};
+use std::{collections::HashSet, time::Duration};
 
 use clap::crate_version;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
-    layout::{
-        Constraint,
-        HorizontalAlignment::{Center, Right},
-        Layout, Rect,
-    },
-    style::{Color, Modifier, Style},
-    symbols::line::VERTICAL,
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType::Rounded, Gauge, List, ListItem, ListState, Paragraph, Tabs, Wrap,
-    },
+    widgets::{Block, BorderType::Rounded, Paragraph, Wrap},
 };
-use sinuous_client::GroupId;
+use sinuous_client::{GroupId, PlayerId};
+use url::Url;
 
-use crate::sonos::{
-    Command, ConnectionStatus, ErrorMessage, GroupAction, GroupState, HouseholdState, TrackInfo,
+use crate::artwork::Artwork;
+use crate::config::{UiConfig, UiSetting};
+use crate::sonos::{Command, ErrorMessage, GroupState, HouseholdState};
+use crate::symbols::Symbols;
+use crate::theme::{THEMES, Theme};
+
+mod input;
+mod now_playing;
+mod panel;
+mod popup;
+
+pub use input::handle_input;
+use now_playing::{AlbumArt, now_playing_width, render_now_playing};
+use panel::{render_group_editor, render_group_panel};
+use popup::{
+    render_config_dialog, render_favorites_picker, render_help, render_theme_picker,
+    render_volume_mixer,
 };
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ViewMode {
-    #[default]
-    Queue,
-    Favorites,
-}
+/// How wide the panel on the left (the groups, or the speakers of one) is: a third of the screen,
+/// within these bounds, unless the keys to use need more room.
+const GROUP_PANEL_MIN_WIDTH: u16 = 34;
+const GROUP_PANEL_MAX_WIDTH: u16 = 48;
+
+/// The keys to use in the group panel, and in the group editor.
+const GROUP_PANEL_HELP: &str = " ↑↓ • ENTER select • ESC close ";
+const GROUP_EDITOR_HELP: &str = " ↑↓ • SPACE toggle • ENTER apply • ESC cancel ";
 
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
 pub struct UiState {
-    view: ViewMode,
-    selected_group: Option<GroupId>,
-    selected_favorite: usize,
+    selected_group: Option<Selection>,
+    mode: Mode,
+    /// The last error that wasn't about the speakers.
+    error: Option<ErrorMessage>,
+}
+
+/// What is open beside, or on top of, what the selected group is playing.
+#[derive(Debug, Default)]
+enum Mode {
+    #[default]
+    NowPlaying,
+    /// The group panel, on the left, with the group at this index highlighted.
+    GroupPicker(PanelHighlight),
+    /// The group editor, in the panel on the left.
+    GroupEditor(GroupEditor),
+    /// The favorites picker, with the favorite at this index highlighted.
+    FavoritesPicker(usize),
+    /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
+    VolumeMixer(usize),
+    /// The keyboard shortcuts.
+    Help,
+    /// The configuration dialog, and the theme picker on top of it, if open.
+    Config {
+        /// The setting highlighted: one of [`UiSetting::ALL`], or the theme after them.
+        highlighted: usize,
+        /// The theme highlighted in the theme picker, as an index in [`THEMES`].
+        theme_picker: Option<usize>,
+    },
+}
+
+/// What a key press asks for, besides changing what is shown.
+#[derive(Debug)]
+pub enum Request {
+    /// Send a command to the speakers.
+    Speakers(Command),
+    /// Turn a setting on or off, and save it.
+    Toggle(UiSetting),
+    /// Use the theme with this name, and save it.
+    SetTheme(String),
+    /// Exit the app.
+    Quit,
+}
+
+/// The group the user is looking at.
+#[derive(Debug)]
+struct Selection {
+    group: GroupId,
+    /// Its coordinator when it was last seen, to follow it into the group it joins if this one is
+    /// gone. A group keeps its ID when its members change, but a speaker leaving a group gets a
+    /// new one.
+    coordinator: PlayerId,
+}
+
+impl Selection {
+    fn of(group: &GroupState) -> Self {
+        Self {
+            group: group.id.clone(),
+            coordinator: group.coordinator_id.clone(),
+        }
+    }
+}
+
+/// Speakers being added to or removed from a group.
+#[derive(Debug)]
+struct GroupEditor {
+    group: GroupId,
+    /// The highlighted speaker, as an index in [`HouseholdState::players`].
+    highlight: PanelHighlight,
+    /// The speakers to have in the group.
+    members: HashSet<PlayerId>,
+}
+
+impl GroupEditor {
+    /// An editor for the speakers of `group`, with its coordinator highlighted.
+    fn new(group: &GroupState, state: &HouseholdState) -> Self {
+        let highlighted = state
+            .players
+            .iter()
+            .position(|p| p.id == group.coordinator_id)
+            .unwrap_or(0);
+        Self {
+            group: group.id.clone(),
+            highlight: PanelHighlight::new(highlighted),
+            members: group.player_ids.iter().cloned().collect(),
+        }
+    }
+}
+
+/// The highlighted item of a list in the panel on the left, and the first one shown.
+#[derive(Debug, Clone, Copy)]
+struct PanelHighlight {
+    item: usize,
+    first: usize,
+}
+
+impl PanelHighlight {
+    fn new(item: usize) -> Self {
+        Self { item, first: 0 }
+    }
+
+    /// Scroll as little as possible for the highlighted item to be among the `shown` ones.
+    fn scroll(&mut self, shown: usize) {
+        self.first = self
+            .first
+            .min(self.item)
+            .max((self.item + 1).saturating_sub(shown));
+    }
 }
 
 impl UiState {
     /// Keep the selection valid for the latest `state`, e.g. when the selected group is gone.
     pub fn sync(&mut self, state: &HouseholdState) {
-        if !self
+        // When the selected group is gone, follow its coordinator to the group it is in now.
+        let selected = self
             .selected_group
             .as_ref()
-            .is_some_and(|id| state.groups.iter().any(|g| &g.id == id))
-        {
-            self.selected_group = state.groups.first().map(|g| g.id.clone());
+            .and_then(|selected| {
+                state.group(&selected.group).or_else(|| {
+                    state
+                        .groups
+                        .iter()
+                        .find(|g| g.player_ids.contains(&selected.coordinator))
+                })
+            })
+            .or_else(|| state.groups.first());
+        self.selected_group = selected.map(Selection::of);
+
+        let mixer_rows = self
+            .current_group(state)
+            .map(|(_, group)| state.members(group).count() + 1);
+        match &mut self.mode {
+            Mode::GroupPicker(_) if state.groups.is_empty() => self.mode = Mode::NowPlaying,
+            Mode::GroupPicker(highlight) => clamp(&mut highlight.item, state.groups.len()),
+            Mode::GroupEditor(editor) if state.group(&editor.group).is_none() => {
+                self.mode = Mode::NowPlaying;
+            }
+            Mode::GroupEditor(editor) => clamp(&mut editor.highlight.item, state.players.len()),
+            Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
+            Mode::VolumeMixer(highlighted) => match mixer_rows {
+                Some(rows) => clamp(highlighted, rows),
+                None => self.mode = Mode::NowPlaying,
+            },
+            Mode::NowPlaying | Mode::Help | Mode::Config { .. } => {}
         }
-        self.selected_favorite = self
-            .selected_favorite
-            .min(state.favorites.len().saturating_sub(1));
+    }
+
+    /// Whether a popup is open in the middle of the screen. The group panel and the group editor
+    /// are beside what is playing, not on top of it.
+    fn popup_open(&self) -> bool {
+        !matches!(
+            self.mode,
+            Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_)
+        )
+    }
+
+    /// The name of the theme to show instead of the configured one, while choosing one.
+    pub fn previewed_theme(&self) -> Option<&'static str> {
+        let Mode::Config {
+            theme_picker: Some(highlighted),
+            ..
+        } = self.mode
+        else {
+            return None;
+        };
+        Some(&THEMES.get(highlighted)?.name)
+    }
+
+    /// Show `message` in the header for a while.
+    pub fn show_error(&mut self, message: String) {
+        self.error = Some(ErrorMessage::new(message));
+    }
+
+    /// The error to show in the header, if any: the most recent one, if it is recent enough.
+    fn shown_error<'a>(&'a self, state: &'a HouseholdState) -> Option<&'a ErrorMessage> {
+        [state.last_error.as_ref(), self.error.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|err| is_shown(err))
+            .max_by_key(|err| err.at)
     }
 
     /// The selected group and its index.
     fn current_group<'a>(&self, state: &'a HouseholdState) -> Option<(usize, &'a GroupState)> {
-        let id = self.selected_group.as_ref()?;
+        let id = &self.selected_group.as_ref()?.group;
         state.groups.iter().enumerate().find(|(_, g)| &g.id == id)
     }
+}
 
-    fn select_group(&mut self, state: &HouseholdState, forward: bool) {
-        let len = state.groups.len();
-        if len == 0 {
-            return;
-        }
-        let index = self.current_group(state).map_or(0, |(i, _)| i);
-        let index = if forward {
-            (index + 1) % len
-        } else {
-            (index + len - 1) % len
-        };
-        self.selected_group = Some(state.groups[index].id.clone());
-    }
+/// Keep `highlighted` within a list of `len` rows.
+fn clamp(highlighted: &mut usize, len: usize) {
+    *highlighted = (*highlighted).min(len.saturating_sub(1));
+}
+
+/// The album art to show.
+pub fn artwork_url<'a>(state: &'a HouseholdState, ui: &UiState) -> Option<&'a Url> {
+    let (_, group) = ui.current_group(state)?;
+    group.now_playing.as_ref()?.image_url.as_ref()
 }
 
 /// Whether what is displayed changes over time, and so needs redrawing even when the state doesn't
 /// change.
 pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
-    let showing_error = state.last_error.as_ref().is_some_and(is_shown);
+    let showing_error = ui.shown_error(state).is_some();
     let advancing = ui
         .current_group(state)
         .and_then(|(_, group)| group.playback)
@@ -87,110 +255,87 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     showing_error || advancing
 }
 
-pub fn render_ui(frame: &mut Frame, state: &HouseholdState, ui: &UiState) {
-    match &state.status {
-        ConnectionStatus::Connecting => {
-            return render_message(frame, "Connecting to your Sonos speakers...");
-        }
-        ConnectionStatus::Failed(err) => {
-            return render_message(
-                frame,
-                &format!("Failed to connect to your Sonos speakers: {err}\n\nPress q to quit."),
-            );
-        }
-        ConnectionStatus::Connected => {}
-    }
+pub fn render_ui(
+    frame: &mut Frame,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    artwork: &mut Artwork,
+    settings: &UiConfig,
+    theme: &Theme,
+) {
+    let symbols = Symbols::choose(settings.nerd_font);
+    frame.render_widget(Block::new().style(theme.base()), frame.area());
     let Some((group_index, group)) = ui.current_group(state) else {
-        return render_message(frame, "No speakers found.\n\nPress q to quit.");
+        return render_message(frame, theme, "No speakers found.\n\nPress q to quit.");
     };
-    let [title, tabs, playbar, view_tabs, content] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Min(1),
-    ])
-    .areas(frame.area());
+    let [title, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    // Title line
-    render_title_bar(state, group, frame, title);
-
-    // Group tabs
-    render_tabs(state, group_index, frame, tabs);
-
-    // playbar
-    render_playbar(group, frame, playbar);
-
-    // View tabs
-    render_view_tabs(ui, frame, view_tabs);
-
-    // Main content area (switches based on current view)
-    match ui.view {
-        ViewMode::Queue => render_queue(group, frame, content),
-        ViewMode::Favorites => render_favorites(state, ui, frame, content),
-    }
-}
-
-/// Update `ui` according to the key pressed, and return the command to send to the speakers, if
-/// any.
-pub fn handle_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) -> Option<Command> {
-    match input.code {
-        // View switching
-        KeyCode::Char('1') => ui.view = ViewMode::Queue,
-        KeyCode::Char('2') => ui.view = ViewMode::Favorites,
-
-        // Favorites navigation (only when in Favorites view)
-        KeyCode::Up | KeyCode::Char('k') if ui.view == ViewMode::Favorites => {
-            ui.selected_favorite = ui.selected_favorite.saturating_sub(1);
+    render_title_bar(state, ui, group, symbols, theme, frame, title);
+    let panel_help = match ui.mode {
+        Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
+        Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
+        _ => None,
+    };
+    let now_playing = match panel_help {
+        Some(help) => {
+            let help_width = u16::try_from(Span::raw(help).width() + 2).unwrap_or(u16::MAX);
+            let width = (body.width / 3)
+                .clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH)
+                .max(help_width);
+            let [panel, rest] =
+                Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(body);
+            // When what is playing doesn't fit beside the panel, the panel takes its place rather
+            // than covering part of it.
+            let fits = rest.width >= now_playing_width(group, symbols, theme);
+            let panel = if fits { panel } else { body };
+            match &mut ui.mode {
+                Mode::GroupPicker(highlight) => {
+                    render_group_panel(state, symbols, theme, group_index, highlight, frame, panel)
+                }
+                Mode::GroupEditor(editor) => {
+                    render_group_editor(state, symbols, theme, editor, frame, panel);
+                }
+                _ => {}
+            }
+            fits.then_some(rest)
         }
-        KeyCode::Down | KeyCode::Char('j') if ui.view == ViewMode::Favorites => {
-            if ui.selected_favorite + 1 < state.favorites.len() {
-                ui.selected_favorite += 1;
+        None => Some(body),
+    };
+    if let Some(area) = now_playing {
+        let album_art = match (settings.album_art, ui.popup_open()) {
+            (false, _) => AlbumArt::Off,
+            // Images can be drawn on top of the text, so hide the album art behind popups.
+            (true, true) => AlbumArt::Placeholder,
+            (true, false) => AlbumArt::Shown,
+        };
+        render_now_playing(group, symbols, theme, frame, area, artwork, album_art);
+    }
+
+    // Popups, on top of everything else
+    match ui.mode {
+        Mode::FavoritesPicker(highlighted) => {
+            render_favorites_picker(state, theme, highlighted, frame);
+        }
+        Mode::VolumeMixer(highlighted) => {
+            render_volume_mixer(state, group, theme, highlighted, frame);
+        }
+        Mode::Help => render_help(theme, frame),
+        Mode::Config {
+            highlighted,
+            theme_picker,
+        } => {
+            render_config_dialog(settings, symbols, theme, highlighted, frame);
+            if let Some(highlighted) = theme_picker {
+                render_theme_picker(&settings.theme, theme, highlighted, frame);
             }
         }
-
-        // Group switching
-        KeyCode::BackTab => ui.select_group(state, false),
-        KeyCode::Tab => ui.select_group(state, !input.modifiers.contains(KeyModifiers::SHIFT)),
-
-        _ => return group_command(input, state, ui),
+        Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) => {}
     }
-    None
-}
-
-/// The command for the selected group corresponding to the key pressed, if any.
-fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Option<Command> {
-    let (_, group) = ui.current_group(state)?;
-    let action = match input.code {
-        // Play favorite
-        KeyCode::Enter if ui.view == ViewMode::Favorites => {
-            let favorite = state.favorites.get(ui.selected_favorite)?;
-            GroupAction::LoadFavorite(favorite.id.clone())
-        }
-
-        // Playback controls (work in any view)
-        KeyCode::Char(' ') => {
-            if group.playback.is_some_and(|p| p.is_playing) {
-                GroupAction::Pause
-            } else {
-                GroupAction::Play
-            }
-        }
-        KeyCode::Char('n') => GroupAction::Next,
-        KeyCode::Char('p') => GroupAction::Previous,
-        KeyCode::Char('[') => GroupAction::AdjustVolume(-2),
-        KeyCode::Char(']') => GroupAction::AdjustVolume(2),
-
-        _ => return None,
-    };
-    Some(Command {
-        group: group.id.clone(),
-        action,
-    })
 }
 
 /// Display a message in place of the main UI.
-fn render_message(frame: &mut Frame, message: &str) {
+fn render_message(frame: &mut Frame, theme: &Theme, message: &str) {
     let [_, area, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(6),
@@ -203,218 +348,367 @@ fn render_message(frame: &mut Frame, message: &str) {
         .block(
             Block::bordered()
                 .border_type(Rounded)
+                .border_style(Style::new().fg(theme.border))
                 .title(format!(" Sinuous {} ", crate_version!())),
         );
     frame.render_widget(paragraph, area);
 }
 
-fn render_title_bar(state: &HouseholdState, group: &GroupState, frame: &mut Frame, area: Rect) {
-    let [title_area, volume_area] =
-        Layout::horizontal([Constraint::Min(1), Constraint::Length(8)]).areas(area);
+/// The name of the app and of the current group, or the latest error, and the main shortcuts.
+fn render_title_bar(
+    state: &HouseholdState,
+    ui: &UiState,
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    // Muted text would be hard to read on the background of the header.
+    let separator = Style::default().fg(theme.secondary);
+    let shortcuts = shortcuts_line(symbols, theme);
+    let shortcuts_width = u16::try_from(shortcuts.width()).unwrap_or(u16::MAX);
+    let [title_area, shortcuts_area] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(shortcuts_width)])
+            .spacing(1)
+            .areas(area.inner(Margin::new(1, 0)));
 
-    let mut header = vec![Span::styled(
-        format!("Sinuous {}", crate_version!()),
-        Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    )];
-    match state.last_error.as_ref().filter(|err| is_shown(err)) {
+    let mut header = vec![
+        Span::styled(
+            format!("Sinuous {}", crate_version!()),
+            Style::default()
+                .fg(theme.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" │ ", separator),
+    ];
+    match ui.shown_error(state) {
         Some(err) => header.push(Span::styled(
-            format!(" -- {}", err.message),
-            Style::default().fg(Color::Red),
+            err.message.as_str(),
+            Style::default().fg(theme.error),
         )),
         None => {
-            header.push(Span::styled(" -- Playing on ", Style::default()));
-            header.push(Span::styled(&group.name, Style::default().fg(Color::Green)));
+            header.push(Span::raw(format!("{} ", symbols.playing_on)));
+            header.push(Span::styled(&group.name, Style::default().fg(theme.name)));
         }
     }
-    let title = Paragraph::new(Line::from(header));
-    frame.render_widget(title, title_area);
 
-    let vol_text = match group.volume {
-        Some(volume) => format!("🔊: {volume:2} "),
-        None => "🔊: -- ".to_owned(),
-    };
-    let vol = Paragraph::new(vol_text).alignment(Right);
-    frame.render_widget(vol, volume_area);
+    frame.render_widget(
+        Block::new().style(Style::default().bg(theme.title_background)),
+        area,
+    );
+    frame.render_widget(Line::from(header), title_area);
+    frame.render_widget(shortcuts, shortcuts_area);
 }
 
-fn render_tabs(state: &HouseholdState, selected: usize, frame: &mut Frame, area: Rect) {
-    let tabs = Tabs::new(state.groups.iter().map(|g| g.name.as_str()))
-        .block(Block::bordered().border_type(Rounded).title(" Groups "))
-        .highlight_style(Style::default().fg(Color::Green))
-        .select(selected)
-        .divider(VERTICAL);
-
-    frame.render_widget(tabs, area);
-}
-
-fn render_view_tabs(ui: &UiState, frame: &mut Frame, area: Rect) {
-    let view_names = vec!["1 Queue", "2 Favorites"];
-    let selected = match ui.view {
-        ViewMode::Queue => 0,
-        ViewMode::Favorites => 1,
-    };
-
-    let tabs = Tabs::new(view_names)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .select(selected)
-        .divider(VERTICAL);
-
-    frame.render_widget(tabs, area);
-}
-
-fn render_queue(group: &GroupState, frame: &mut Frame, area: Rect) {
-    let now_playing = group.now_playing.as_ref();
-    let next_track = group.next_track.as_ref();
-
-    // Only the current and next tracks are known: select the current one (if any)
-    let mut list_state = ListState::default();
-    list_state.select(now_playing.map(|_| 0));
-
-    let items = now_playing.into_iter().chain(next_track).map(|t| {
-        let s = format!(
-            "{} ({})",
-            format_track(t),
-            format_duration(t.duration_secs.unwrap_or(0))
-        );
-        ListItem::new(s)
-    });
-    let list = List::new(items)
-        .highlight_style(Style::default().fg(Color::LightMagenta))
-        .highlight_symbol("⏵")
-        .block(
-            Block::bordered()
-                .title_top(" Queue ")
-                .title_bottom(
-                    Line::from(" SPACE play/pause • n next • p prev • [ ] volume ")
-                        .centered()
-                        .style(Style::default().fg(Color::DarkGray)),
-                )
-                .border_type(Rounded),
-        );
-
-    frame.render_stateful_widget(list, area, &mut list_state);
-}
-
-fn render_playbar(group: &GroupState, frame: &mut Frame, area: Rect) {
-    let playback = group.playback;
-    let (np, label, ratio) = if let Some(track) = &group.now_playing {
-        let duration = track.duration_secs.unwrap_or(0);
-        let elapsed = playback.map_or(0, |p| {
-            let elapsed = u32::try_from(p.position(Instant::now()).as_secs()).unwrap_or(u32::MAX);
-            // The position is worked out locally, and can run past the end of the track until the
-            // speakers report the next one.
-            if duration != 0 {
-                elapsed.min(duration)
-            } else {
-                elapsed
-            }
-        });
-        let percent = if duration != 0 {
-            f64::clamp(f64::from(elapsed) / f64::from(duration), 0.0, 1.0)
-        } else {
-            0.0
-        };
-        let label = format!(
-            "{} / {}",
-            format_duration(elapsed),
-            format_duration(duration)
-        );
-        let title = format!(" {} ", format_track(track));
-        (title, label, percent)
-    } else {
-        (
-            " Nothing currently playing ".to_owned(),
-            "0:00 / 0:00".to_owned(),
-            0.0,
-        )
-    };
-
-    // Border around the whole playbar section
-    let block = Block::bordered().border_type(Rounded).title(np);
-    // The inner area is where the gauge and control buttons will be rendered
-    let playbar_area = block.inner(area);
-
-    // split the inner area into 2 columns for the buttons and the gauge
-    let [symbol_area, bar_area] =
-        Layout::horizontal([Constraint::Length(3), Constraint::Min(1)]).areas(playbar_area);
-
-    let is_playing = playback.is_some_and(|p| p.is_playing);
-    let media_symbol = if is_playing { "⏵" } else { "⏸" };
-    let symbol = Paragraph::new(media_symbol).alignment(Center);
-
-    let playbar = Gauge::default()
-        .use_unicode(true)
-        .gauge_style(
-            Style::default()
-                .fg(Color::LightGreen)
-                .bg(Color::Black)
-                .add_modifier(Modifier::ITALIC),
-        )
-        .label(label)
-        .ratio(ratio);
-
-    // render all the widgets
-    frame.render_widget(block, area);
-    frame.render_widget(symbol, symbol_area);
-    frame.render_widget(playbar, bar_area);
-}
-
-fn render_favorites(state: &HouseholdState, ui: &UiState, frame: &mut Frame, area: Rect) {
-    let mut list_state = ListState::default();
-    list_state.select(Some(ui.selected_favorite));
-
-    let items = state.favorites.iter().map(|fav| {
-        let s = match &fav.description {
-            Some(description) => format!("{} - {}", fav.name, description),
-            None => fav.name.clone(),
-        };
-        ListItem::new(s)
-    });
-
-    let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("⏵ ")
-        .block(
-            Block::bordered()
-                .title_top(" Favorites ")
-                .title_bottom(
-                    Line::from(" ↑↓ Navigate • ENTER to play ")
-                        .centered()
-                        .style(Style::default().fg(Color::DarkGray)),
-                )
-                .border_type(Rounded),
-        );
-
-    frame.render_stateful_widget(list, area, &mut list_state);
+/// The keys to press for the help, the configuration dialog and quitting.
+fn shortcuts_line(symbols: &Symbols, theme: &Theme) -> Line<'static> {
+    let entries = [
+        ("?", symbols.help),
+        (",", symbols.config),
+        ("q", symbols.quit),
+    ];
+    // Muted text would be hard to read on the background of the header.
+    let separator = Style::default().fg(theme.secondary);
+    let mut spans = Vec::new();
+    for (i, (key, label)) in entries.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" • ", separator));
+        }
+        spans.push(Span::raw(key));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme.secondary),
+        ));
+    }
+    Line::from(spans)
 }
 
 fn is_shown(error: &ErrorMessage) -> bool {
     error.at.elapsed() < ERROR_DISPLAY_TIME
 }
 
-fn format_track(track: &TrackInfo) -> String {
-    format!(
-        "{} - {} - {}",
-        track.artist.as_deref().unwrap_or("Unknown"),
-        track.album.as_deref().unwrap_or("Unknown"),
-        track.title.as_deref().unwrap_or("Unknown"),
-    )
-}
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-fn format_duration(secs: u32) -> String {
-    let minutes = secs / 60;
-    let seconds = secs % 60;
+    use super::*;
+    use crate::sonos::PlayerInfo;
 
-    format!("{minutes}:{seconds:02}")
+    pub(super) fn household() -> HouseholdState {
+        let player = |id: &str, name: &str| PlayerInfo {
+            id: id.into(),
+            name: name.to_owned(),
+            model: Some("Move".to_owned()),
+            volume: Some(20),
+        };
+        HouseholdState {
+            groups: vec![
+                GroupState::new(
+                    "bedroom".into(),
+                    "Bedroom + Office".to_owned(),
+                    "b".into(),
+                    vec!["b".into(), "o".into()],
+                ),
+                GroupState::new(
+                    "kitchen".into(),
+                    "Kitchen".to_owned(),
+                    "k".into(),
+                    vec!["k".into()],
+                ),
+            ],
+            players: vec![
+                player("b", "Bedroom"),
+                player("k", "Kitchen"),
+                player("o", "Office"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn press(
+        keys: &[KeyCode],
+        state: &HouseholdState,
+        ui: &mut UiState,
+    ) -> Option<Request> {
+        keys.iter().fold(None, |_, code| {
+            handle_input(
+                &KeyEvent::new(*code, KeyModifiers::NONE),
+                state,
+                &UiConfig::default(),
+                ui,
+            )
+        })
+    }
+
+    #[test]
+    fn selection_follows_its_coordinator_into_the_group_it_joins() {
+        let mut state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(
+            &[KeyCode::Char('g'), KeyCode::Char('j'), KeyCode::Enter],
+            &state,
+            &mut ui,
+        );
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen");
+
+        // The kitchen joined the bedroom, e.g. from the Sonos app: its group is gone, and the group
+        // it joined keeps its ID.
+        state.groups = vec![GroupState::new(
+            "bedroom".into(),
+            "Bedroom + Office + Kitchen".to_owned(),
+            "b".into(),
+            vec!["b".into(), "o".into(), "k".into()],
+        )];
+        ui.sync(&state);
+        assert_eq!(
+            ui.current_group(&state).unwrap().1.name,
+            "Bedroom + Office + Kitchen"
+        );
+
+        // The kitchen left again, getting a group with a new ID: the group shown stays.
+        state.groups = vec![
+            GroupState::new(
+                "bedroom".into(),
+                "Bedroom + Office".to_owned(),
+                "b".into(),
+                vec!["b".into(), "o".into()],
+            ),
+            GroupState::new(
+                "kitchen:2".into(),
+                "Kitchen".to_owned(),
+                "k".into(),
+                vec!["k".into()],
+            ),
+        ];
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + Office");
+    }
+
+    #[test]
+    fn group_panel_takes_the_place_of_what_is_playing_when_both_dont_fit() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+
+        let settings = UiConfig::default();
+        let group = &state.groups[0];
+        let needed =
+            now_playing_width(group, Symbols::choose(settings.nerd_font), &Theme::TERMINAL);
+        for (width, shown) in [
+            (GROUP_PANEL_MIN_WIDTH + needed, true),
+            (GROUP_PANEL_MIN_WIDTH + needed - 1, false),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            terminal
+                .draw(|f| {
+                    render_ui(
+                        f,
+                        &state,
+                        &mut ui,
+                        &mut artwork,
+                        &settings,
+                        &Theme::TERMINAL,
+                    );
+                })
+                .unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(screen.contains("Groups"), "{width}");
+            assert_eq!(screen.contains("Nothing playing"), shown, "{width}");
+        }
+    }
+
+    #[test]
+    fn placeholder_shows_where_the_album_art_goes_when_there_is_none() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        for album_art in [true, false] {
+            let settings = UiConfig {
+                album_art,
+                ..UiConfig::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+            terminal
+                .draw(|f| {
+                    render_ui(
+                        f,
+                        &state,
+                        &mut ui,
+                        &mut artwork,
+                        &settings,
+                        &Theme::TERMINAL,
+                    );
+                })
+                .unwrap();
+            let shown = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .any(|cell| cell.symbol() == "♪");
+            assert_eq!(shown, album_art);
+        }
+    }
+
+    #[test]
+    fn group_editor_is_a_panel_beside_what_is_playing() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('G')], &state, &mut ui);
+
+        let settings = UiConfig::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        terminal
+            .draw(|f| {
+                render_ui(
+                    f,
+                    &state,
+                    &mut ui,
+                    &mut artwork,
+                    &settings,
+                    &Theme::TERMINAL,
+                );
+            })
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for shown in [
+            "Group speakers",
+            GROUP_EDITOR_HELP,
+            "Bedroom Move",
+            "In this group · coordinator",
+            "On its own",
+            "Nothing playing",
+        ] {
+            assert!(screen.contains(shown), "{shown}");
+        }
+    }
+
+    #[test]
+    fn volume_mixer_shows_models_with_sliders_lined_up() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut state = household();
+        state.players[0].model = Some("Arc Ultra".to_owned());
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('v')], &state, &mut ui);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks());
+        terminal
+            .draw(|f| {
+                let settings = UiConfig::default();
+                render_ui(
+                    f,
+                    &state,
+                    &mut ui,
+                    &mut artwork,
+                    &settings,
+                    &Theme::TERMINAL,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect();
+        let slider_start = |label: &str| {
+            let row = rows
+                .iter()
+                .find(|row| row.contains(label))
+                .unwrap_or_else(|| panic!("{label}"));
+            row.char_indices()
+                .position(|(_, c)| matches!(c, '━' | '●' | '─'))
+                .unwrap()
+        };
+        let group = slider_start("Group");
+        assert_eq!(slider_start("Bedroom Arc Ultra"), group);
+        assert_eq!(slider_start("Office Move"), group);
+    }
+
+    #[test]
+    fn panel_scrolls_as_little_as_possible() {
+        let mut highlight = PanelHighlight::new(0);
+        let mut firsts = Vec::new();
+        for item in [0, 1, 2, 3, 4, 3, 2, 1, 0] {
+            highlight.item = item;
+            highlight.scroll(3);
+            firsts.push(highlight.first);
+        }
+        assert_eq!(firsts, [0, 0, 0, 1, 2, 2, 2, 1, 0]);
+
+        // Opening it on an item further down shows that item at the bottom.
+        let mut highlight = PanelHighlight::new(7);
+        highlight.scroll(3);
+        assert_eq!(highlight.first, 5);
+    }
 }
