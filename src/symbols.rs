@@ -1,6 +1,8 @@
 //! What actions and statuses are shown as: text labels, or icons for terminals using a
 //! [Nerd Font](https://www.nerdfonts.com).
 
+use std::borrow::Cow;
+
 #[derive(Debug)]
 pub struct Symbols {
     // Playback status
@@ -27,6 +29,8 @@ pub struct Symbols {
     pub line_in: &'static str,
     /// Between the kind of a source and its name.
     pub source_kind_separator: &'static str,
+    /// The icons of music services, by a word in their name, in lower case.
+    services: &'static [(&'static str, &'static str)],
 
     // Actions
     pub next: &'static str,
@@ -70,6 +74,7 @@ impl Symbols {
         podcast: "Podcast",
         line_in: "Line-in",
         source_kind_separator: " · ",
+        services: &[],
         next: "next",
         previous: "prev",
         playing_on: "Playing on",
@@ -103,6 +108,18 @@ impl Symbols {
         podcast: "\u{f0994}",       // nf-md-podcast
         line_in: "\u{f186b}",       // nf-md-audio_input_rca
         source_kind_separator: " ",
+        services: &[
+            ("spotify", "\u{f04c7}"),    // nf-md-spotify
+            ("apple", "\u{f0035}"),      // nf-md-apple
+            ("amazon", "\u{f270}"),      // nf-fa-amazon
+            ("soundcloud", "\u{f04c0}"), // nf-md-soundcloud
+            ("youtube", "\u{f05c3}"),    // nf-md-youtube
+            ("pandora", "\u{f03db}"),    // nf-md-pandora
+            ("plex", "\u{f06ba}"),       // nf-md-plex
+            ("audible", "\u{f0df}"),     // nf-fa-audible
+            ("bandcamp", "\u{f2d5}"),    // nf-fa-bandcamp
+            ("mixcloud", "\u{f289}"),    // nf-fa-mixcloud
+        ],
         next: "\u{f04ad}",              // nf-md-skip_next
         previous: "\u{f04ae}",          // nf-md-skip_previous
         playing_on: "\u{f04c3}",        // nf-md-speaker
@@ -127,6 +144,15 @@ impl Symbols {
         }
     }
 
+    /// The music service called `name`, after its icon if it has one.
+    pub fn service<'a>(&self, name: &'a str) -> Cow<'a, str> {
+        let lower = name.to_lowercase();
+        match self.services.iter().find(|(word, _)| lower.contains(word)) {
+            Some((_, icon)) => Cow::Owned(format!("{icon} {name}")),
+            None => Cow::Borrowed(name),
+        }
+    }
+
     /// Nerd Font icons if `nerd_font`, text labels otherwise.
     pub fn choose(nerd_font: bool) -> &'static Self {
         if nerd_font {
@@ -134,5 +160,19 @@ impl Symbols {
         } else {
             &Self::LABELS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn services_get_their_icon_with_nerd_fonts_only() {
+        let nerd_font = Symbols::choose(true);
+        assert_eq!(nerd_font.service("Spotify"), "\u{f04c7} Spotify");
+        assert_eq!(nerd_font.service("Apple Music"), "\u{f0035} Apple Music");
+        assert_eq!(nerd_font.service("TIDAL"), "TIDAL");
+        assert_eq!(Symbols::choose(false).service("Spotify"), "Spotify");
     }
 }

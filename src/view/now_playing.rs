@@ -237,7 +237,7 @@ fn source_line<'a>(source: &'a Source, symbols: &Symbols, theme: &Theme) -> Line
     let mut spans = Vec::new();
     if let Some(service) = &source.service {
         spans.push(Span::styled(
-            service.as_str(),
+            symbols.service(service),
             Style::default().fg(theme.name),
         ));
     }
@@ -508,14 +508,14 @@ mod tests {
             source_line(&source, Symbols::choose(nerd_font), &Theme::TERMINAL).to_string()
         };
         assert_eq!(line(false), "Spotify · Playlist · Chill");
-        assert_eq!(line(true), "Spotify · \u{f0cb8} Chill");
+        assert_eq!(line(true), "\u{f04c7} Spotify · \u{f0cb8} Chill");
 
         let unknown_kind = Source {
             kind: Some("mystery".to_owned()),
             ..source.clone()
         };
         let line = source_line(&unknown_kind, Symbols::choose(true), &Theme::TERMINAL);
-        assert_eq!(line.to_string(), "Spotify · Chill");
+        assert_eq!(line.to_string(), "\u{f04c7} Spotify · Chill");
     }
 
     #[test]

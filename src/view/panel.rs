@@ -141,7 +141,10 @@ fn group_lines<'a>(
     let mut status_line = vec![Span::styled(format!("{icon} {status}"), status_style)];
     if let Some(service) = group.source.as_ref().and_then(|s| s.service.as_deref()) {
         status_line.push(Span::styled(" · ", muted));
-        status_line.push(Span::styled(service, Style::default().fg(theme.secondary)));
+        status_line.push(Span::styled(
+            symbols.service(service),
+            Style::default().fg(theme.secondary),
+        ));
     }
 
     // The track, lined up with the status after the icon

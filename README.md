@@ -58,7 +58,8 @@ devices = ["192.168.1.10", "Living Room"]
 # Whether to show the album art of the current track.
 album_art = true
 # Whether to show icons instead of labels for actions, play modes and kinds of
-# sources. Requires a Nerd Font (https://www.nerdfonts.com).
+# sources, and before the names of music services. Requires a Nerd Font
+# (https://www.nerdfonts.com).
 nerd_font = false
 # The colours to use: "terminal" for the terminal's own, or one of the themes of
 # opaline (https://github.com/hyperb1iss/opaline#-builtin-themes): ayu-dark,
