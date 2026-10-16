@@ -295,7 +295,6 @@ fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'
     let modes = [
         (symbols.shuffle, modes.shuffle, Action::Shuffle),
         (repeat, modes.repeat || modes.repeat_one, Action::Repeat),
-        (symbols.crossfade, modes.crossfade, Action::Crossfade),
     ];
 
     let mut spans = Vec::new();
