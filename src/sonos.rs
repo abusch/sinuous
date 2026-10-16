@@ -17,6 +17,7 @@ use sinuous_client::{
     Event, EventPayload, FavoriteId, GroupId, Household, HouseholdId, PlayerId, Subscription,
     Topology,
     favorites::Favorite,
+    hardware_status::{BatteryStatus, WirelessNetworkStatus},
     playback::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
         PlaybackStatus,
@@ -150,6 +151,10 @@ pub struct PlayerInfo {
     /// The model of its main device, e.g. `Arc Ultra` for a home theatre, if it is known.
     pub model: Option<String>,
     pub volume: Option<u8>,
+    /// The battery of a portable player, once it has reported it.
+    pub battery: Option<BatteryStatus>,
+    /// Its Wi-Fi connection, once it has reported it. Players connected by Ethernet don't.
+    pub wifi: Option<WirelessNetworkStatus>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -472,13 +477,20 @@ impl Service {
                 "Playback error: {}",
                 err.reason.unwrap_or(err.error_code)
             )),
-            EventPayload::PlayerVolume(volume) => {
+            payload @ (EventPayload::PlayerVolume(_)
+            | EventPayload::BatteryStatus(_)
+            | EventPayload::WirelessNetworkStatus(_)) => {
                 let Some(id) = event.player_id else { return };
                 self.state_tx.send_if_modified(|state| {
                     let Some(player) = state.players.iter_mut().find(|p| p.id == id) else {
                         return false;
                     };
-                    player.volume = Some(volume.volume);
+                    match payload {
+                        EventPayload::PlayerVolume(volume) => player.volume = Some(volume.volume),
+                        EventPayload::BatteryStatus(battery) => player.battery = Some(battery),
+                        EventPayload::WirelessNetworkStatus(wifi) => player.wifi = Some(wifi),
+                        _ => return false,
+                    }
                     true
                 });
             }
@@ -565,7 +577,7 @@ impl Service {
             let old_groups = std::mem::replace(&mut state.groups, groups);
             keep_group_states(&mut state.groups, &old_groups);
             let old_players = std::mem::replace(&mut state.players, players);
-            keep_player_volumes(&mut state.players, &old_players);
+            keep_player_states(&mut state.players, &old_players);
         });
         self.subscribe_to_members();
     }
@@ -585,10 +597,12 @@ impl Service {
                     Subscription::SleepTimer(group.id.clone()),
                 ]
             });
-            let players = state
-                .players
-                .iter()
-                .map(|player| Subscription::PlayerVolume(player.id.clone()));
+            let players = state.players.iter().flat_map(|player| {
+                [
+                    Subscription::PlayerVolume(player.id.clone()),
+                    Subscription::HardwareStatus(player.id.clone()),
+                ]
+            });
             groups.chain(players).collect()
         };
         self.subscribed.retain(|s| wanted.contains(s));
@@ -658,7 +672,7 @@ impl Service {
             | Subscription::PlaybackMetadata(id)
             | Subscription::GroupVolume(id)
             | Subscription::SleepTimer(id) => state.group(id).map(|g| g.name.clone()),
-            Subscription::PlayerVolume(id) => state
+            Subscription::PlayerVolume(id) | Subscription::HardwareStatus(id) => state
                 .players
                 .iter()
                 .find(|p| &p.id == id)
@@ -909,6 +923,8 @@ fn player_infos(topology: &Topology) -> Vec<PlayerInfo> {
                 .or(player.devices.first())
                 .map(|device| device.model_display_name.clone()),
             volume: None,
+            battery: None,
+            wifi: None,
         })
         .collect();
     players.sort_by(|a, b| a.name.cmp(&b.name));
@@ -929,11 +945,13 @@ fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
     }
 }
 
-/// Copy the volumes of the players in `old_players` to the same players in `players`.
-fn keep_player_volumes(players: &mut [PlayerInfo], old_players: &[PlayerInfo]) {
+/// Copy what we know about the players in `old_players` to the same players in `players`.
+fn keep_player_states(players: &mut [PlayerInfo], old_players: &[PlayerInfo]) {
     for player in players {
         if let Some(old) = old_players.iter().find(|old| old.id == player.id) {
             player.volume = old.volume;
+            player.battery = old.battery;
+            player.wifi.clone_from(&old.wifi);
         }
     }
 }

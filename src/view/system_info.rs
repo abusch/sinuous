@@ -12,6 +12,9 @@ use ratatui::{
 };
 use sinuous_client::{
     groups::{Capability, DeviceInfo, Player},
+    hardware_status::{
+        BatteryStatus, ChargerValidity, ChargingState, ConnectionHealth, WirelessNetworkStatus,
+    },
     playback::PlaybackState,
 };
 
@@ -25,6 +28,9 @@ const HELP: &str = " ↑↓ scroll • PGUP/PGDN page • ESC close ";
 
 /// How wide labels are, for the values to line up.
 const LABEL_WIDTH: usize = 14;
+
+/// Below this charge, in percent, the battery is shown as low.
+const LOW_BATTERY: f64 = 20.0;
 
 /// How far the details of the devices of a speaker are indented.
 const DEVICE_INDENT: usize = 2;
@@ -120,6 +126,17 @@ fn player_lines(state: &HouseholdState, player: &PlayerInfo, rows: &Rows) -> Vec
         .volume
         .map_or_else(|| "unknown".to_owned(), |volume| volume.to_string());
     lines.push(rows.row(0, "Volume", volume));
+    if let Some(battery) = &player.battery {
+        lines.push(rows.row(0, "Battery", battery_text(battery, theme)));
+    }
+    match &player.wifi {
+        Some(wifi) => lines.extend(wifi_rows(wifi, rows)),
+        None => lines.push(rows.row(
+            0,
+            "Wi-Fi",
+            Span::styled("not reported", Style::default().fg(theme.muted)),
+        )),
+    }
 
     let Some(details) = state.topology.players.get(&player.id) else {
         return lines;
@@ -179,6 +196,73 @@ fn device_lines(player: &Player, device: &DeviceInfo, rows: &Rows) -> Vec<Line<'
         lines.push(rows.row(DEVICE_INDENT, "Colour", color.clone()));
     }
     lines
+}
+
+/// The charge of `battery`, with whether it is charging, and its temperature.
+fn battery_text(battery: &BatteryStatus, theme: &Theme) -> Span<'static> {
+    let mut text = format!("{:.0}%", battery.battery_percentage);
+    if let Some(raw) = battery
+        .raw_battery_percentage
+        .filter(|raw| raw.round() != battery.battery_percentage.round())
+    {
+        text.push_str(&format!(" (measured {raw:.0}%)"));
+    }
+    text.push_str(match battery.charging_state {
+        ChargingState::Charging => " · charging",
+        ChargingState::NotCharging => " · not charging",
+        ChargingState::Unknown => "",
+    });
+    if battery.valid_charger == ChargerValidity::Valid {
+        text.push_str(" · on its charger");
+    }
+    if let Some(temperature) = battery.battery_temperature {
+        text.push_str(&format!(" · {temperature:.1} °C"));
+    }
+    let low = battery.battery_percentage < LOW_BATTERY
+        && battery.charging_state != ChargingState::Charging;
+    if low {
+        Span::styled(text, Style::default().fg(theme.error))
+    } else {
+        Span::raw(text)
+    }
+}
+
+/// The network `wifi` is connected to, and to which access point and how.
+fn wifi_rows(wifi: &WirelessNetworkStatus, rows: &Rows) -> Vec<Line<'static>> {
+    let health = match wifi.connection_health {
+        ConnectionHealth::Excellent => "excellent",
+        ConnectionHealth::Good => "good",
+        // Players may report weaker connections with values the client doesn't know yet.
+        ConnectionHealth::Unknown => "other",
+    };
+    let mut lines = vec![rows.row(0, "Wi-Fi", format!("{} · {health}", wifi.ssid))];
+
+    let mut access_point = Vec::new();
+    if let Some(bssid) = &wifi.bssid {
+        access_point.push(bssid.clone());
+    }
+    if let Some(frequency) = wifi.frequency {
+        access_point.push(band(frequency).to_owned());
+    }
+    if let Some(channel) = wifi.channel {
+        access_point.push(format!("channel {channel}"));
+    }
+    if let Some(rssi) = wifi.rssi {
+        access_point.push(format!("signal {rssi}"));
+    }
+    if !access_point.is_empty() {
+        lines.push(rows.row(0, "Access point", access_point.join(" · ")));
+    }
+    lines
+}
+
+/// The Wi-Fi band a frequency in MHz is in.
+fn band(frequency: u32) -> &'static str {
+    match frequency {
+        ..3000 => "2.4 GHz",
+        3000..5925 => "5 GHz",
+        5925.. => "6 GHz",
+    }
 }
 
 /// Lays out labelled values.
@@ -356,11 +440,37 @@ mod tests {
     fn state() -> HouseholdState {
         let mut topology = Topology::default();
         topology.players.insert_overwrite(bedroom());
-        HouseholdState {
+        let mut state = HouseholdState {
             household_id: Some("Sonos_1".into()),
             topology: Arc::new(topology),
             ..household()
-        }
+        };
+        let bedroom = &mut state.players[0];
+        bedroom.battery = Some(
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "battery",
+                "batteryPercentage": 15.0,
+                "rawBatteryPercentage": 12.0,
+                "chargingState": "NOT_CHARGING",
+                "batteryTemperature": 31.5,
+                "validCharger": "NOT_APPLICABLE",
+            }))
+            .unwrap(),
+        );
+        bedroom.wifi = Some(
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "wirelessNetworkStatus",
+                // "Home", base64-encoded
+                "ssid": "SG9tZQ==",
+                "bssid": "aa:bb:cc:dd:ee:ff",
+                "frequency": 5320,
+                "channel": 64,
+                "rssi": 45,
+                "connectionHealth": "EXCELLENT",
+            }))
+            .unwrap(),
+        );
+        state
     }
 
     #[test]
@@ -370,11 +480,16 @@ mod tests {
         ui.sync(&state);
         press(&[KeyCode::Char('i')], &state, &mut ui);
 
-        let screen = screen(&state, &mut ui, 60, 60).join("\n");
+        let screen = screen(&state, &mut ui, 80, 60).join("\n");
         for shown in [
             "Household     Sonos_1",
             "Group         Bedroom + Office · coordinator",
             "Address       10.0.0.2",
+            "Battery       15% (measured 12%) · not charging · 31.5 °C",
+            "Wi-Fi         Home · excellent",
+            "Access point  aa:bb:cc:dd:ee:ff · 5 GHz · channel 64 · signal 45",
+            // The kitchen hasn't reported its Wi-Fi, e.g. because it's wired.
+            "Wi-Fi         not reported",
             "Device        Arc Ultra",
             "  Model       S45",
             "Device        Sub 4",
@@ -391,7 +506,7 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("              VOICE, SPEAKER_DETECTION"),
+            screen.contains("              AUDIO_CLIP, VOICE, SPEAKER_DETECTION"),
             "{screen}"
         );
         // The main device has the speaker's address, so it isn't repeated.
@@ -407,7 +522,7 @@ mod tests {
 
         let at_end = screen(&state, &mut ui, 60, 12);
         // The title bar, then the border: the last line is just above the bottom border.
-        assert!(at_end[10].contains("Volume"), "{at_end:#?}");
+        assert!(at_end[10].contains("Wi-Fi"), "{at_end:#?}");
 
         press(&[KeyCode::Down], &state, &mut ui);
         assert_eq!(screen(&state, &mut ui, 60, 12), at_end);

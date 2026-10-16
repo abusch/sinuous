@@ -498,6 +498,8 @@ mod tests {
             name: name.to_owned(),
             model: Some("Move".to_owned()),
             volume: Some(20),
+            battery: None,
+            wifi: None,
         };
         HouseholdState {
             groups: vec![
