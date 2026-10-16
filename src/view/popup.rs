@@ -180,6 +180,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
                 ("f", "Play a favorite"),
                 ("g", "Switch to another group"),
                 ("G", "Add or remove speakers from the group"),
+                ("i", "System info, for troubleshooting"),
                 (",", "Configuration"),
                 ("?", "This help"),
                 ("q", "Close what is open, or quit"),

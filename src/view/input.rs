@@ -12,7 +12,7 @@ use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{Command, GroupAction, GroupState, HouseholdState, PlayerAction};
 use crate::theme::THEMES;
 
-use super::{GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, Selection, UiState};
+use super::{GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, Scroll, Selection, UiState};
 
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 1;
@@ -55,6 +55,10 @@ pub fn handle_input(
         Mode::PlaybackMenu(highlighted) => {
             handle_playback_menu_input(input, state, ui, highlighted)
         }
+        Mode::SystemInfo(scroll) => {
+            handle_system_info_input(input, ui, scroll);
+            None
+        }
         Mode::Help => {
             if matches!(input.code, KeyCode::Esc | KeyCode::Char('?')) {
                 ui.mode = Mode::NowPlaying;
@@ -93,6 +97,7 @@ fn handle_now_playing_input(
         KeyCode::Char('.') => Mode::PlaybackMenu(0),
 
         KeyCode::Char('?') => Mode::Help,
+        KeyCode::Char('i') => Mode::SystemInfo(Scroll::default()),
         KeyCode::Char(',') => Mode::Config {
             highlighted: 0,
             theme_picker: None,
@@ -167,6 +172,26 @@ fn handle_theme_picker_input(
         _ => {}
     }
     None
+}
+
+/// Update `ui` according to the key pressed while the system info is open, scrolled to `scroll`.
+fn handle_system_info_input(input: &KeyEvent, ui: &mut UiState, scroll: Scroll) {
+    // Scrolling past the end is undone when drawing it, which is when its length is known.
+    let page = scroll.page.max(1);
+    let offset = match input.code {
+        KeyCode::Up | KeyCode::Char('k') => scroll.offset.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => scroll.offset.saturating_add(1),
+        KeyCode::PageUp => scroll.offset.saturating_sub(page),
+        KeyCode::PageDown => scroll.offset.saturating_add(page),
+        KeyCode::Home => 0,
+        KeyCode::End => usize::MAX,
+        KeyCode::Esc | KeyCode::Char('i') => {
+            ui.mode = Mode::NowPlaying;
+            return;
+        }
+        _ => return,
+    };
+    ui.mode = Mode::SystemInfo(Scroll { offset, ..scroll });
 }
 
 /// Update `ui` according to the key pressed while the group picker is open, with the group at
@@ -618,7 +643,7 @@ mod tests {
         let mut ui = UiState::default();
         ui.sync(&state);
 
-        for opening in [',', 'v', '.', 'f', 'g', 'G', '?'] {
+        for opening in [',', 'v', '.', 'f', 'g', 'G', 'i', '?'] {
             assert!(press(&[KeyCode::Char(opening)], &state, &mut ui).is_none());
             assert!(!matches!(ui.mode, Mode::NowPlaying), "{opening}");
             assert!(press(&[KeyCode::Char('q')], &state, &mut ui).is_none());

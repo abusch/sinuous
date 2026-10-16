@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use sinuous_client::{
-    Event, EventPayload, FavoriteId, GroupId, Household, PlayerId, Subscription, Topology,
+    Event, EventPayload, FavoriteId, GroupId, Household, HouseholdId, PlayerId, Subscription,
+    Topology,
     favorites::Favorite,
     playback::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
@@ -63,6 +64,9 @@ impl ProvidedDevices {
 /// What the service knows about the household.
 #[derive(Debug, Clone, Default)]
 pub struct HouseholdState {
+    pub household_id: Option<HouseholdId>,
+    /// The groups and players as the household last reported them, with all their details.
+    pub topology: Arc<Topology>,
     /// Sorted by name.
     pub groups: Vec<GroupState>,
     /// Sorted by name.
@@ -147,6 +151,7 @@ pub struct PlayerInfo {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Playback {
+    pub state: PlaybackState,
     pub is_playing: bool,
     pub play_modes: PlayModes,
     /// What the current source supports.
@@ -173,6 +178,7 @@ impl Playback {
 
     fn from_parts(state: PlaybackState, position: Duration, now: Instant) -> Self {
         Self {
+            state,
             is_playing: matches!(state, PlaybackState::Playing | PlaybackState::Buffering),
             play_modes: PlayModes::default(),
             actions: PlaybackActions::default(),
@@ -368,7 +374,10 @@ impl SonosHandle {
 ///
 /// The groups and speakers of the household are in the state right away.
 pub fn spawn(household: Household) -> SonosHandle {
-    let (state_tx, state_rx) = watch::channel(HouseholdState::default());
+    let (state_tx, state_rx) = watch::channel(HouseholdState {
+        household_id: Some(household.id().clone()),
+        ..HouseholdState::default()
+    });
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_SIZE);
 
     tokio::spawn(run_commands(household.clone(), cmd_rx, state_tx.clone()));
@@ -536,11 +545,13 @@ impl Service {
     /// Update the groups and players from the household's topology, keeping what we know about
     /// them.
     fn update_groups(&mut self) {
-        let (groups, players) = {
+        let (topology, groups, players) = {
             let topology = self.topology_rx.borrow_and_update();
-            (group_states(&topology), player_infos(&topology))
+            let (groups, players) = (group_states(&topology), player_infos(&topology));
+            (Arc::new(topology.clone()), groups, players)
         };
         self.state_tx.send_modify(|state| {
+            state.topology = topology;
             let old_groups = std::mem::replace(&mut state.groups, groups);
             keep_group_states(&mut state.groups, &old_groups);
             let old_players = std::mem::replace(&mut state.players, players);
