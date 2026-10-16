@@ -1,7 +1,5 @@
 //! The popups shown in the middle of the screen.
 
-use std::time::{Duration, Instant};
-
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -16,7 +14,7 @@ use crate::symbols::Symbols;
 use crate::theme::{self, THEMES, Theme};
 
 use super::input::{Action, supports};
-use super::now_playing::{volume_slider, volume_text};
+use super::now_playing::{sleep_timer_text, volume_slider, volume_text};
 use super::panel::speaker_name;
 use super::{PlaybackItem, SLEEP_TIMER_MINUTES};
 
@@ -169,10 +167,7 @@ fn sleep_timer_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Lin
         .saturating_sub(Span::raw(symbols.sleep_timer).width());
     let value = match group.sleep_timer {
         Some(end) => Span::styled(
-            format!(
-                "{} left",
-                time_left(end.saturating_duration_since(Instant::now()))
-            ),
+            format!("{} left", sleep_timer_text(end)),
             Style::default().fg(theme.name),
         ),
         None => Span::styled("off", Style::default().fg(theme.secondary)),
@@ -183,17 +178,6 @@ fn sleep_timer_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Lin
         Span::raw("Sleep timer: "),
         value,
     ])
-}
-
-/// `time` as hours, minutes and seconds, or minutes and seconds if under an hour.
-fn time_left(time: Duration) -> String {
-    let secs = time.as_secs();
-    let (hours, minutes, seconds) = (secs / 3600, secs / 60 % 60, secs % 60);
-    if hours > 0 {
-        format!("{hours}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes}:{seconds:02}")
-    }
 }
 
 /// A popup listing what the sleep timer can be set to, with the choice at `highlighted`

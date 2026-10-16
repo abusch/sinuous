@@ -296,9 +296,7 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     let advancing = group
         .and_then(|group| group.playback)
         .is_some_and(|playback| playback.is_advancing());
-    // The playback menu shows the time left on the sleep timer.
-    let counting_down = matches!(ui.mode, Mode::PlaybackMenu { .. })
-        && group.is_some_and(|group| group.sleep_timer.is_some());
+    let counting_down = group.is_some_and(|group| group.sleep_timer.is_some());
     showing_error || advancing || counting_down
 }
 
@@ -752,6 +750,54 @@ mod tests {
         let group = slider_start("Group");
         assert_eq!(slider_start("Bedroom Arc Ultra"), group);
         assert_eq!(slider_start("Office Move"), group);
+    }
+
+    #[test]
+    fn sleep_timer_shows_beside_the_controls_when_there_is_room() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let controls_row = |state: &HouseholdState, width| {
+            let mut ui = UiState::default();
+            ui.sync(state);
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
+            terminal
+                .draw(|f| {
+                    render_ui(
+                        f,
+                        state,
+                        &mut ui,
+                        &mut artwork,
+                        &UiConfig::default(),
+                        &Theme::TERMINAL,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .find(|row| row.contains("shuffle"))
+                .unwrap()
+        };
+        let without = household();
+        let mut with = household();
+        with.groups[0].sleep_timer =
+            Some(std::time::Instant::now() + Duration::from_secs(20 * 60 + 30));
+
+        let row = controls_row(&with, 80);
+        let timer = row.find("🌙").expect(&row);
+        assert!(row[timer..].contains("20:2"), "{row}");
+        // The controls don't move to make room for it.
+        let plain = controls_row(&without, 80);
+        assert_eq!(row[..timer].trim_end(), plain.trim_end(), "{row}");
+
+        // There is no room for it beside the controls.
+        let narrow = controls_row(&with, 44);
+        assert!(!narrow.contains("🌙"), "{narrow}");
     }
 
     #[test]
