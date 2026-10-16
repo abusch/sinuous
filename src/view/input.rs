@@ -12,7 +12,7 @@ use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{Command, GroupAction, GroupState, HouseholdState, PlayerAction};
 use crate::theme::THEMES;
 
-use super::{GroupEditor, Mode, PanelHighlight, Request, Selection, UiState};
+use super::{GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, Selection, UiState};
 
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 1;
@@ -52,6 +52,9 @@ pub fn handle_input(
             handle_favorites_picker_input(input, state, ui, highlighted)
         }
         Mode::VolumeMixer(highlighted) => handle_volume_mixer_input(input, state, ui, highlighted),
+        Mode::PlaybackMenu(highlighted) => {
+            handle_playback_menu_input(input, state, ui, highlighted)
+        }
         Mode::Help => {
             if matches!(input.code, KeyCode::Esc | KeyCode::Char('?')) {
                 ui.mode = Mode::NowPlaying;
@@ -87,6 +90,7 @@ fn handle_now_playing_input(
         }
 
         KeyCode::Char('v') => Mode::VolumeMixer(0),
+        KeyCode::Char('.') => Mode::PlaybackMenu(0),
 
         KeyCode::Char('?') => Mode::Help,
         KeyCode::Char(',') => Mode::Config {
@@ -282,6 +286,43 @@ fn handle_volume_mixer_input(
     }
 }
 
+/// Update `ui` according to the key pressed while the playback menu is open, with the item at
+/// `highlighted` highlighted, and return the command it asks for, if any.
+fn handle_playback_menu_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    highlighted: usize,
+) -> Option<Command> {
+    if let Some(highlighted) = navigate(input.code, highlighted, PlaybackItem::ALL.len()) {
+        ui.mode = Mode::PlaybackMenu(highlighted);
+        return None;
+    }
+    match input.code {
+        // It stays open, to see the change.
+        KeyCode::Char(' ') | KeyCode::Enter => {
+            let (_, group) = ui.current_group(state)?;
+            match PlaybackItem::ALL.get(highlighted)? {
+                PlaybackItem::Crossfade => {
+                    let update = PlayModesUpdate {
+                        crossfade: Some(!group.playback?.play_modes.crossfade),
+                        ..Default::default()
+                    };
+                    command_for(
+                        group,
+                        (GroupAction::SetPlayModes(update), Some(Action::Crossfade)),
+                    )
+                }
+            }
+        }
+        KeyCode::Esc | KeyCode::Char('.') => {
+            ui.mode = Mode::NowPlaying;
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Update `ui` according to the key pressed while the favorites picker is open, with the favorite
 /// at index `highlighted` highlighted, and return the command playing the favorite, if any.
 fn handle_favorites_picker_input(
@@ -314,7 +355,7 @@ fn handle_favorites_picker_input(
 fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Option<Command> {
     let (_, group) = ui.current_group(state)?;
     // The action, and what the current source needs to support for it, if anything.
-    let (action, required) = match input.code {
+    let action = match input.code {
         KeyCode::Char(' ') if group.playback.is_some_and(|p| p.is_playing) => {
             (GroupAction::Pause, Some(Action::PlayPause))
         }
@@ -337,16 +378,17 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
             let update = next_repeat(playback.play_modes, playback.actions);
             (GroupAction::SetPlayModes(update), Some(Action::Repeat))
         }
-        KeyCode::Char('c') => {
-            let update = PlayModesUpdate {
-                crossfade: Some(!group.playback?.play_modes.crossfade),
-                ..Default::default()
-            };
-            (GroupAction::SetPlayModes(update), Some(Action::Crossfade))
-        }
 
         _ => return None,
     };
+    command_for(group, action)
+}
+
+/// The command doing `action` for `group`, unless its source doesn't support what it requires.
+fn command_for(
+    group: &GroupState,
+    (action, required): (GroupAction, Option<Action>),
+) -> Option<Command> {
     if required.is_some_and(|required| !supports(group, required)) {
         return None;
     }
@@ -405,6 +447,7 @@ mod tests {
     use sinuous_client::GroupId;
 
     use super::*;
+    use crate::sonos::Playback;
     use crate::view::tests::{household, press};
 
     #[test]
@@ -564,7 +607,7 @@ mod tests {
             Some(Request::Toggle(UiSetting::NerdFont))
         ));
         // Keys don't reach the main screen while it is open.
-        assert!(press(&[KeyCode::Char('c')], &state, &mut ui).is_none());
+        assert!(press(&[KeyCode::Char('s')], &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
         assert!(matches!(ui.mode, Mode::NowPlaying));
     }
@@ -575,7 +618,7 @@ mod tests {
         let mut ui = UiState::default();
         ui.sync(&state);
 
-        for opening in [',', 'v', 'f', 'g', 'G', '?'] {
+        for opening in [',', 'v', '.', 'f', 'g', 'G', '?'] {
             assert!(press(&[KeyCode::Char(opening)], &state, &mut ui).is_none());
             assert!(!matches!(ui.mode, Mode::NowPlaying), "{opening}");
             assert!(press(&[KeyCode::Char('q')], &state, &mut ui).is_none());
@@ -600,6 +643,39 @@ mod tests {
             press(&[KeyCode::Char('q')], &state, &mut ui),
             Some(Request::Quit)
         ));
+    }
+
+    #[test]
+    fn playback_menu_toggles_crossfade_when_supported() {
+        let mut state = household();
+        let actions = PlaybackActions {
+            can_crossfade: true,
+            ..Default::default()
+        };
+        state.groups[0].playback = Some(Playback::paused(PlayModes::default(), actions));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let request = press(&[KeyCode::Char('.'), KeyCode::Char(' ')], &state, &mut ui);
+        let Some(Request::Speakers(Command::Group {
+            group,
+            action: GroupAction::SetPlayModes(update),
+        })) = request
+        else {
+            panic!("Unexpected request: {request:?}");
+        };
+        assert_eq!(group, GroupId::from("bedroom"));
+        assert_eq!(update.crossfade, Some(true));
+        // It stays open, to see the change.
+        assert!(matches!(ui.mode, Mode::PlaybackMenu(0)));
+
+        state.groups[0].playback = Some(Playback::paused(
+            PlayModes::default(),
+            PlaybackActions::default(),
+        ));
+        assert!(press(&[KeyCode::Enter], &state, &mut ui).is_none());
+        assert!(press(&[KeyCode::Char('.')], &state, &mut ui).is_none());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]

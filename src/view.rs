@@ -26,8 +26,8 @@ pub use input::handle_input;
 use now_playing::{AlbumArt, now_playing_width, render_now_playing};
 use panel::{render_group_editor, render_group_panel};
 use popup::{
-    render_config_dialog, render_favorites_picker, render_help, render_theme_picker,
-    render_volume_mixer,
+    render_config_dialog, render_favorites_picker, render_help, render_playback_menu,
+    render_theme_picker, render_volume_mixer,
 };
 
 /// How long errors are displayed for.
@@ -64,6 +64,8 @@ enum Mode {
     FavoritesPicker(usize),
     /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
     VolumeMixer(usize),
+    /// The playback menu, with the item at this index in [`PlaybackItem::ALL`] highlighted.
+    PlaybackMenu(usize),
     /// The keyboard shortcuts.
     Help,
     /// The configuration dialog, and the theme picker on top of it, if open.
@@ -73,6 +75,16 @@ enum Mode {
         /// The theme highlighted in the theme picker, as an index in [`THEMES`].
         theme_picker: Option<usize>,
     },
+}
+
+/// What the playback menu lists.
+#[derive(Debug, Clone, Copy)]
+enum PlaybackItem {
+    Crossfade,
+}
+
+impl PlaybackItem {
+    const ALL: [Self; 1] = [Self::Crossfade];
 }
 
 /// What a key press asks for, besides changing what is shown.
@@ -183,6 +195,7 @@ impl UiState {
             }
             Mode::GroupEditor(editor) => clamp(&mut editor.highlight.item, state.players.len()),
             Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
+            Mode::PlaybackMenu(highlighted) => clamp(highlighted, PlaybackItem::ALL.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
                 Some(rows) => clamp(highlighted, rows),
                 None => self.mode = Mode::NowPlaying,
@@ -319,6 +332,9 @@ pub fn render_ui(
         }
         Mode::VolumeMixer(highlighted) => {
             render_volume_mixer(state, group, theme, highlighted, frame);
+        }
+        Mode::PlaybackMenu(highlighted) => {
+            render_playback_menu(group, symbols, theme, highlighted, frame);
         }
         Mode::Help => render_help(theme, frame),
         Mode::Config {

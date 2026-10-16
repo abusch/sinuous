@@ -13,6 +13,8 @@ use crate::sonos::{GroupState, HouseholdState};
 use crate::symbols::Symbols;
 use crate::theme::{self, THEMES, Theme};
 
+use super::PlaybackItem;
+use super::input::{Action, supports};
 use super::now_playing::{volume_slider, volume_text};
 use super::panel::speaker_name;
 
@@ -109,6 +111,53 @@ pub(super) fn render_volume_mixer(
     }
 }
 
+/// A popup listing what can be changed about the playback of `group`, with the item at
+/// `highlighted` highlighted. What its source doesn't support is dimmed.
+pub(super) fn render_playback_menu(
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    highlighted: usize,
+    frame: &mut Frame,
+) {
+    let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
+    let lines = PlaybackItem::ALL
+        .into_iter()
+        .map(|item| {
+            let (on, action, description) = match item {
+                PlaybackItem::Crossfade => (modes.crossfade, Action::Crossfade, "Crossfade"),
+            };
+            let checkbox = if on {
+                symbols.checked
+            } else {
+                symbols.unchecked
+            };
+            let (checkbox_style, style) = match (supports(group, action), on) {
+                (false, _) => (
+                    Style::default().fg(theme.muted),
+                    Style::default().fg(theme.muted),
+                ),
+                (true, true) => (Style::default().fg(theme.on), Style::default()),
+                (true, false) => (Style::default().fg(theme.secondary), Style::default()),
+            };
+            Line::from(vec![
+                Span::styled(checkbox, checkbox_style),
+                Span::raw(" "),
+                Span::styled(description, style),
+            ])
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        theme,
+        " Playback ",
+        lines,
+        Some(highlighted),
+        " ↑↓ Navigate • SPACE change • ESC close ",
+    );
+}
+
 /// A popup listing all the keyboard shortcuts.
 pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
     // The keys to use in the other popups are shown at their bottom.
@@ -120,8 +169,8 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
                 ("p / n", "Previous / next track"),
                 ("s", "Toggle shuffle"),
                 ("r", "Cycle repeat: all, one, off"),
-                ("c", "Toggle crossfade"),
                 ("[ / ]", "Volume down / up"),
+                (".", "Playback menu"),
             ],
         ),
         (

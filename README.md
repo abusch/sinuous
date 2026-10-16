@@ -58,9 +58,10 @@ sinuous --device "Living Room"
 | --- | --- |
 | <kbd>Space</kbd> | Play / pause |
 | <kbd>p</kbd> / <kbd>n</kbd> | Previous / next track |
-| <kbd>s</kbd> / <kbd>r</kbd> / <kbd>c</kbd> | Toggle shuffle / cycle repeat (all, one, off) / toggle crossfade |
+| <kbd>s</kbd> / <kbd>r</kbd> | Toggle shuffle / cycle repeat (all, one, off) |
 | <kbd>[</kbd> / <kbd>]</kbd> | Volume of the group down / up |
 | <kbd>v</kbd> | Volume of the group and of each of its speakers |
+| <kbd>.</kbd> | Playback menu, e.g. to toggle crossfade |
 | <kbd>g</kbd> | Switch to another group, from a panel showing what each group is playing |
 | <kbd>G</kbd> | Add speakers to or remove speakers from the group |
 | <kbd>f</kbd> | Play one of your Sonos favorites |

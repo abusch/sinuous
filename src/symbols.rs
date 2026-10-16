@@ -18,7 +18,6 @@ pub struct Symbols {
     pub shuffle: &'static str,
     pub repeat: &'static str,
     pub repeat_one: &'static str,
-    pub crossfade: &'static str,
 
     // Kinds of sources, e.g. a group playing an album
     pub album: &'static str,
@@ -66,7 +65,6 @@ impl Symbols {
         shuffle: "shuffle",
         repeat: "repeat",
         repeat_one: "repeat one",
-        crossfade: "crossfade",
         album: "Album",
         artist: "Artist",
         playlist: "Playlist",
@@ -100,7 +98,6 @@ impl Symbols {
         shuffle: "\u{f049f}",       // nf-md-shuffle_variant
         repeat: "\u{f0456}",        // nf-md-repeat
         repeat_one: "\u{f0458}",    // nf-md-repeat_once
-        crossfade: "\u{f0915}",     // nf-md-transition
         album: "\u{f0025}",         // nf-md-album
         artist: "\u{f0803}",        // nf-md-account_music
         playlist: "\u{f0cb8}",      // nf-md-playlist_music

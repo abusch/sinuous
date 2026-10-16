@@ -196,6 +196,16 @@ impl Playback {
     pub fn is_advancing(&self) -> bool {
         self.advancing_since.is_some()
     }
+
+    /// Paused playback, in these play modes, of a source supporting `actions`.
+    #[cfg(test)]
+    pub fn paused(play_modes: PlayModes, actions: PlaybackActions) -> Self {
+        Self {
+            play_modes,
+            actions,
+            ..Self::from_parts(PlaybackState::Paused, Duration::ZERO, Instant::now())
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
