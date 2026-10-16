@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/abusch/sinuous/compare/v0.2.0...v0.3.0) - 2026-10-16
+
+### Added
+
+- Show the battery and Wi-Fi of each speaker in the system info
+- Show the time left on the sleep timer beside the playback controls
+- Set a sleep timer from the playback menu
+- Add a system info screen, with the details of each speaker
+- Show shuffle and repeat on either side of the playback controls
+- Add a playback menu, with the crossfade toggle
+- Cache album art on disk
+
+### Fixed
+
+- Build the musl binaries, which cross failed to by not reading multi-line inline tables
+
 ## [0.2.0](https://github.com/abusch/sinuous/compare/v0.1.6...v0.2.0) - 2026-10-15
 
 ### Added
