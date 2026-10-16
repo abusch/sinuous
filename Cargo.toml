@@ -36,3 +36,6 @@ url = "2"
 
 [profile.release]
 strip = "symbols"
+
+[dev-dependencies]
+serde_json = "1.0.154"

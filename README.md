@@ -65,6 +65,7 @@ sinuous --device "Living Room"
 | <kbd>g</kbd> | Switch to another group, from a panel showing what each group is playing |
 | <kbd>G</kbd> | Add speakers to or remove speakers from the group |
 | <kbd>f</kbd> | Play one of your Sonos favorites |
+| <kbd>i</kbd> | System info: the details of each speaker, for troubleshooting |
 | <kbd>,</kbd> | Settings |
 | <kbd>?</kbd> | Keyboard shortcuts |
 | <kbd>q</kbd> | Close what is open, or quit |

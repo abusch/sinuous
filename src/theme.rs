@@ -57,6 +57,8 @@ pub struct Theme {
     pub text: Color,
     /// Less important text, e.g. labels.
     pub secondary: Color,
+    /// Labels standing out from their values, where both matter, e.g. in the system info.
+    pub label: Color,
     /// Unimportant text, e.g. separators, and actions that aren't supported.
     pub muted: Color,
     /// The name of the app, and titles.
@@ -88,6 +90,7 @@ impl Theme {
         selection: None,
         text: Color::Reset,
         secondary: Color::Gray,
+        label: Color::Cyan,
         muted: Color::DarkGray,
         title: Color::Yellow,
         title_background: Color::DarkGray,
@@ -116,6 +119,7 @@ impl Theme {
             selection: Some(color(tokens::BG_SELECTION)),
             text: color(tokens::TEXT_PRIMARY),
             secondary: color(tokens::TEXT_SECONDARY),
+            label: color(tokens::ACCENT_SECONDARY),
             muted: color(tokens::TEXT_DIM),
             title: color(tokens::ACCENT_PRIMARY),
             title_background: color(tokens::BG_HIGHLIGHT),

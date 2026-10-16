@@ -21,6 +21,7 @@ mod input;
 mod now_playing;
 mod panel;
 mod popup;
+mod system_info;
 
 pub use input::handle_input;
 use now_playing::{AlbumArt, now_playing_width, render_now_playing};
@@ -29,6 +30,7 @@ use popup::{
     render_config_dialog, render_favorites_picker, render_help, render_playback_menu,
     render_theme_picker, render_volume_mixer,
 };
+use system_info::render_system_info;
 
 /// How long errors are displayed for.
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
@@ -68,6 +70,8 @@ enum Mode {
     PlaybackMenu(usize),
     /// The keyboard shortcuts.
     Help,
+    /// The details of each speaker, in place of everything but the title bar.
+    SystemInfo(Scroll),
     /// The configuration dialog, and the theme picker on top of it, if open.
     Config {
         /// The setting highlighted: one of [`UiSetting::ALL`], or the theme after them.
@@ -145,6 +149,15 @@ impl GroupEditor {
     }
 }
 
+/// How far a fullscreen view is scrolled.
+#[derive(Debug, Clone, Copy, Default)]
+struct Scroll {
+    /// The first line shown.
+    offset: usize,
+    /// How many lines were shown last time, to scroll by pages.
+    page: usize,
+}
+
 /// The highlighted item of a list in the panel on the left, and the first one shown.
 #[derive(Debug, Clone, Copy)]
 struct PanelHighlight {
@@ -200,16 +213,16 @@ impl UiState {
                 Some(rows) => clamp(highlighted, rows),
                 None => self.mode = Mode::NowPlaying,
             },
-            Mode::NowPlaying | Mode::Help | Mode::Config { .. } => {}
+            Mode::NowPlaying | Mode::Help | Mode::SystemInfo(_) | Mode::Config { .. } => {}
         }
     }
 
     /// Whether a popup is open in the middle of the screen. The group panel and the group editor
-    /// are beside what is playing, not on top of it.
+    /// are beside what is playing, not on top of it, and the system info takes its place.
     fn popup_open(&self) -> bool {
         !matches!(
             self.mode,
-            Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_)
+            Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) | Mode::SystemInfo(_)
         )
     }
 
@@ -285,6 +298,9 @@ pub fn render_ui(
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
     render_title_bar(state, ui, group, symbols, theme, frame, title);
+    if let Mode::SystemInfo(scroll) = &mut ui.mode {
+        return render_system_info(state, theme, scroll, frame, body);
+    }
     let panel_help = match ui.mode {
         Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
         Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
@@ -346,7 +362,7 @@ pub fn render_ui(
                 render_theme_picker(&settings.theme, theme, highlighted, frame);
             }
         }
-        Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) => {}
+        Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) | Mode::SystemInfo(_) => {}
     }
 }
 
