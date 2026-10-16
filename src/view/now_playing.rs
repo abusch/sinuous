@@ -148,7 +148,11 @@ pub(super) fn render_now_playing(
     // icons), and the progress bar with the slider.
     let controls = controls_line(group, symbols, theme);
     let volume_width = volume_width(&controls);
+    let controls_width = u16::try_from(controls.width()).unwrap_or(u16::MAX);
     frame.render_widget(Paragraph::new(controls).centered(), controls_area);
+    if let Some(end) = group.sleep_timer {
+        render_sleep_timer(end, symbols, theme, frame, controls_area, controls_width);
+    }
     let slider_area = render_volume(
         group,
         symbols,
@@ -448,6 +452,43 @@ impl Widget for VolumeSlider<'_> {
 /// `volume`, right-aligned on 3 columns, or `--` if it isn't known.
 pub(super) fn volume_text(volume: Option<u8>) -> String {
     volume.map_or_else(|| " --".to_owned(), |v| format!("{v:>3}"))
+}
+
+/// The time left on a sleep timer running out at `end`, to the right of the controls, which are
+/// `controls_width` wide in the middle of `area`, if there is room for it.
+fn render_sleep_timer(
+    end: Instant,
+    symbols: &Symbols,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+    controls_width: u16,
+) {
+    // As far from the controls as they are from each other
+    const GAP: u16 = 3;
+    let timer = Line::styled(
+        format!("{} {}", symbols.sleep_timer, sleep_timer_text(end)),
+        Style::default().fg(theme.on),
+    );
+    let width = u16::try_from(timer.width()).unwrap_or(u16::MAX);
+    // Where `Paragraph::centered` puts the controls
+    let x = area.x + area.width.saturating_sub(controls_width) / 2 + controls_width + GAP;
+    let timer_area = Rect { x, width, ..area }.intersection(area);
+    if timer_area.width == width {
+        frame.render_widget(timer, timer_area);
+    }
+}
+
+/// The time left on a sleep timer running out at `end`: hours, minutes and seconds, or minutes
+/// and seconds if under an hour.
+pub(super) fn sleep_timer_text(end: Instant) -> String {
+    let secs = end.saturating_duration_since(Instant::now()).as_secs();
+    let (hours, minutes, seconds) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 fn format_duration(secs: u32) -> String {
