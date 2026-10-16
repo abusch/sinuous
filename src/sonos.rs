@@ -501,33 +501,10 @@ impl Service {
                         return false;
                     };
                     match payload {
-                        EventPayload::PlaybackStatus(status) => {
-                            group.playback = Some(Playback::new(&status, Instant::now()));
-                        }
-                        EventPayload::MetadataStatus(metadata) => {
-                            // Images served by the coordinator are given relative to it.
-                            let coordinator_url = self
-                                .topology_rx
-                                .borrow()
-                                .coordinator(&id)
-                                .map(|p| p.websocket_url.clone());
-                            let images = Images {
-                                coordinator_url: coordinator_url.as_ref(),
-                                fallback: metadata
-                                    .container
-                                    .as_ref()
-                                    .and_then(|c| c.image_url.as_ref()),
-                            };
-                            group.now_playing = metadata
-                                .current_item
-                                .as_ref()
-                                .and_then(|item| TrackInfo::new(item, Some(&images)));
-                            // Only the image of the current track is shown.
-                            group.next_track = metadata
-                                .next_item
-                                .as_ref()
-                                .and_then(|item| TrackInfo::new(item, None));
-                            group.source = Source::new(&metadata);
+                        // The playback status and metadata, together
+                        EventPayload::ExtendedPlaybackStatus(status) => {
+                            group.playback = Some(Playback::new(&status.playback, Instant::now()));
+                            self.update_metadata(group, &status.metadata);
                         }
                         EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
                         EventPayload::SleepTimerStatus(timer) => {
@@ -541,6 +518,33 @@ impl Service {
                 });
             }
         }
+    }
+
+    /// Update what `group` is playing from `metadata`.
+    fn update_metadata(&self, group: &mut GroupState, metadata: &MetadataStatus) {
+        // Images served by the coordinator are given relative to it.
+        let coordinator_url = self
+            .topology_rx
+            .borrow()
+            .coordinator(&group.id)
+            .map(|p| p.websocket_url.clone());
+        let images = Images {
+            coordinator_url: coordinator_url.as_ref(),
+            fallback: metadata
+                .container
+                .as_ref()
+                .and_then(|c| c.image_url.as_ref()),
+        };
+        group.now_playing = metadata
+            .current_item
+            .as_ref()
+            .and_then(|item| TrackInfo::new(item, Some(&images)));
+        // Only the image of the current track is shown.
+        group.next_track = metadata
+            .next_item
+            .as_ref()
+            .and_then(|item| TrackInfo::new(item, None));
+        group.source = Source::new(metadata);
     }
 
     async fn load_favorites(&mut self, version: String) {
@@ -591,8 +595,7 @@ impl Service {
             let state = self.state_tx.borrow();
             let groups = state.groups.iter().flat_map(|group| {
                 [
-                    Subscription::Playback(group.id.clone()),
-                    Subscription::PlaybackMetadata(group.id.clone()),
+                    Subscription::PlaybackExtended(group.id.clone()),
                     Subscription::GroupVolume(group.id.clone()),
                     Subscription::SleepTimer(group.id.clone()),
                 ]
@@ -668,8 +671,7 @@ impl Service {
     fn subject(&self, subscription: &Subscription) -> String {
         let state = self.state_tx.borrow();
         let name = match subscription {
-            Subscription::Playback(id)
-            | Subscription::PlaybackMetadata(id)
+            Subscription::PlaybackExtended(id)
             | Subscription::GroupVolume(id)
             | Subscription::SleepTimer(id) => state.group(id).map(|g| g.name.clone()),
             Subscription::PlayerVolume(id) | Subscription::HardwareStatus(id) => state
