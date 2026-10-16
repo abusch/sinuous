@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use sinuous_client::{
     PlayerId,
@@ -12,7 +14,10 @@ use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{Command, GroupAction, GroupState, HouseholdState, PlayerAction};
 use crate::theme::THEMES;
 
-use super::{GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, Scroll, Selection, UiState};
+use super::{
+    GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, SLEEP_TIMER_MINUTES, Scroll,
+    Selection, UiState,
+};
 
 /// How much the volume changes with each key press.
 const VOLUME_STEP: i8 = 1;
@@ -52,9 +57,14 @@ pub fn handle_input(
             handle_favorites_picker_input(input, state, ui, highlighted)
         }
         Mode::VolumeMixer(highlighted) => handle_volume_mixer_input(input, state, ui, highlighted),
-        Mode::PlaybackMenu(highlighted) => {
-            handle_playback_menu_input(input, state, ui, highlighted)
-        }
+        Mode::PlaybackMenu {
+            highlighted,
+            sleep_timer_picker: None,
+        } => handle_playback_menu_input(input, state, ui, highlighted),
+        Mode::PlaybackMenu {
+            highlighted,
+            sleep_timer_picker: Some(choice),
+        } => handle_sleep_timer_picker_input(input, state, ui, highlighted, choice),
         Mode::SystemInfo(scroll) => {
             handle_system_info_input(input, ui, scroll);
             None
@@ -94,7 +104,10 @@ fn handle_now_playing_input(
         }
 
         KeyCode::Char('v') => Mode::VolumeMixer(0),
-        KeyCode::Char('.') => Mode::PlaybackMenu(0),
+        KeyCode::Char('.') => Mode::PlaybackMenu {
+            highlighted: 0,
+            sleep_timer_picker: None,
+        },
 
         KeyCode::Char('?') => Mode::Help,
         KeyCode::Char('i') => Mode::SystemInfo(Scroll::default()),
@@ -320,7 +333,10 @@ fn handle_playback_menu_input(
     highlighted: usize,
 ) -> Option<Command> {
     if let Some(highlighted) = navigate(input.code, highlighted, PlaybackItem::ALL.len()) {
-        ui.mode = Mode::PlaybackMenu(highlighted);
+        ui.mode = Mode::PlaybackMenu {
+            highlighted,
+            sleep_timer_picker: None,
+        };
         return None;
     }
     match input.code {
@@ -338,10 +354,55 @@ fn handle_playback_menu_input(
                         (GroupAction::SetPlayModes(update), Some(Action::Crossfade)),
                     )
                 }
+                PlaybackItem::SleepTimer => {
+                    ui.mode = Mode::PlaybackMenu {
+                        highlighted,
+                        sleep_timer_picker: Some(0),
+                    };
+                    None
+                }
             }
         }
         KeyCode::Esc | KeyCode::Char('.') => {
             ui.mode = Mode::NowPlaying;
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Update `ui` according to the key pressed while the sleep timer picker is open, over the
+/// playback menu with the item at `item` highlighted, with the choice at `highlighted`
+/// highlighted, and return the command setting the sleep timer, if any.
+fn handle_sleep_timer_picker_input(
+    input: &KeyEvent,
+    state: &HouseholdState,
+    ui: &mut UiState,
+    item: usize,
+    highlighted: usize,
+) -> Option<Command> {
+    let menu = |sleep_timer_picker| Mode::PlaybackMenu {
+        highlighted: item,
+        sleep_timer_picker,
+    };
+    if let Some(highlighted) = navigate(input.code, highlighted, SLEEP_TIMER_MINUTES.len()) {
+        ui.mode = menu(Some(highlighted));
+        return None;
+    }
+    match input.code {
+        KeyCode::Enter => {
+            ui.mode = menu(None);
+            let minutes = *SLEEP_TIMER_MINUTES.get(highlighted)?;
+            let (_, group) = ui.current_group(state)?;
+            Some(Command::Group {
+                group: group.id.clone(),
+                action: GroupAction::SetSleepTimer(
+                    minutes.map(|minutes| Duration::from_secs(minutes * 60)),
+                ),
+            })
+        }
+        KeyCode::Esc => {
+            ui.mode = menu(None);
             None
         }
         _ => None,
@@ -692,7 +753,13 @@ mod tests {
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(update.crossfade, Some(true));
         // It stays open, to see the change.
-        assert!(matches!(ui.mode, Mode::PlaybackMenu(0)));
+        assert!(matches!(
+            ui.mode,
+            Mode::PlaybackMenu {
+                highlighted: 0,
+                sleep_timer_picker: None
+            }
+        ));
 
         state.groups[0].playback = Some(Playback::paused(
             PlayModes::default(),
@@ -701,6 +768,57 @@ mod tests {
         assert!(press(&[KeyCode::Enter], &state, &mut ui).is_none());
         assert!(press(&[KeyCode::Char('.')], &state, &mut ui).is_none());
         assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    #[test]
+    fn sleep_timer_picker_sets_and_cancels_the_timer() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let sleep_timer = |request| match request {
+            Some(Request::Speakers(Command::Group {
+                group,
+                action: GroupAction::SetSleepTimer(duration),
+            })) => {
+                assert_eq!(group, GroupId::from("bedroom"));
+                duration
+            }
+            request => panic!("Unexpected request: {request:?}"),
+        };
+
+        // Off, then 15 and 30 minutes
+        let keys = [
+            KeyCode::Char('.'),
+            KeyCode::Char('j'),
+            KeyCode::Enter,
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Enter,
+        ];
+        let duration = sleep_timer(press(&keys, &state, &mut ui));
+        assert_eq!(duration, Some(Duration::from_secs(30 * 60)));
+        // Back to the menu, on the sleep timer
+        assert!(matches!(
+            ui.mode,
+            Mode::PlaybackMenu {
+                highlighted: 1,
+                sleep_timer_picker: None
+            }
+        ));
+
+        let duration = sleep_timer(press(&[KeyCode::Enter, KeyCode::Enter], &state, &mut ui));
+        assert_eq!(duration, None);
+
+        // Cancelling the picker leaves the timer alone.
+        let keys = [KeyCode::Enter, KeyCode::Char('j'), KeyCode::Char('q')];
+        assert!(press(&keys, &state, &mut ui).is_none());
+        assert!(matches!(
+            ui.mode,
+            Mode::PlaybackMenu {
+                sleep_timer_picker: None,
+                ..
+            }
+        ));
     }
 
     #[test]

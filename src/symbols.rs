@@ -52,6 +52,9 @@ pub struct Symbols {
     pub checked: &'static str,
     pub unchecked: &'static str,
     pub theme: &'static str,
+
+    // In the playback menu
+    pub sleep_timer: &'static str,
 }
 
 impl Symbols {
@@ -85,6 +88,7 @@ impl Symbols {
         checked: "[x]",
         unchecked: "[ ]",
         theme: "🎨",
+        sleep_timer: "🌙",
     };
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
@@ -129,6 +133,7 @@ impl Symbols {
         checked: "\u{f0132}",           // nf-md-checkbox_marked
         unchecked: "\u{f0131}",         // nf-md-checkbox_blank_outline
         theme: "\u{f03d8}",             // nf-md-palette
+        sleep_timer: "\u{f04b2}",       // nf-md-sleep
     };
 
     /// The volume level `volume` is shown as.

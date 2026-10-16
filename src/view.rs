@@ -28,7 +28,7 @@ use now_playing::{AlbumArt, now_playing_width, render_now_playing};
 use panel::{render_group_editor, render_group_panel};
 use popup::{
     render_config_dialog, render_favorites_picker, render_help, render_playback_menu,
-    render_theme_picker, render_volume_mixer,
+    render_sleep_timer_picker, render_theme_picker, render_volume_mixer,
 };
 use system_info::render_system_info;
 
@@ -66,8 +66,14 @@ enum Mode {
     FavoritesPicker(usize),
     /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
     VolumeMixer(usize),
-    /// The playback menu, with the item at this index in [`PlaybackItem::ALL`] highlighted.
-    PlaybackMenu(usize),
+    /// The playback menu, and the sleep timer picker on top of it, if open.
+    PlaybackMenu {
+        /// The item highlighted, as an index in [`PlaybackItem::ALL`].
+        highlighted: usize,
+        /// The choice highlighted in the sleep timer picker, as an index in
+        /// [`SLEEP_TIMER_MINUTES`].
+        sleep_timer_picker: Option<usize>,
+    },
     /// The keyboard shortcuts.
     Help,
     /// The details of each speaker, in place of everything but the title bar.
@@ -85,11 +91,23 @@ enum Mode {
 #[derive(Debug, Clone, Copy)]
 enum PlaybackItem {
     Crossfade,
+    SleepTimer,
 }
 
 impl PlaybackItem {
-    const ALL: [Self; 1] = [Self::Crossfade];
+    const ALL: [Self; 2] = [Self::Crossfade, Self::SleepTimer];
 }
+
+/// What the sleep timer can be set to, in minutes, or off.
+const SLEEP_TIMER_MINUTES: [Option<u64>; 7] = [
+    None,
+    Some(15),
+    Some(30),
+    Some(45),
+    Some(60),
+    Some(90),
+    Some(120),
+];
 
 /// What a key press asks for, besides changing what is shown.
 #[derive(Debug)]
@@ -208,7 +226,7 @@ impl UiState {
             }
             Mode::GroupEditor(editor) => clamp(&mut editor.highlight.item, state.players.len()),
             Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
-            Mode::PlaybackMenu(highlighted) => clamp(highlighted, PlaybackItem::ALL.len()),
+            Mode::PlaybackMenu { highlighted, .. } => clamp(highlighted, PlaybackItem::ALL.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
                 Some(rows) => clamp(highlighted, rows),
                 None => self.mode = Mode::NowPlaying,
@@ -274,11 +292,14 @@ pub fn artwork_url<'a>(state: &'a HouseholdState, ui: &UiState) -> Option<&'a Ur
 /// change.
 pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     let showing_error = ui.shown_error(state).is_some();
-    let advancing = ui
-        .current_group(state)
-        .and_then(|(_, group)| group.playback)
+    let group = ui.current_group(state).map(|(_, group)| group);
+    let advancing = group
+        .and_then(|group| group.playback)
         .is_some_and(|playback| playback.is_advancing());
-    showing_error || advancing
+    // The playback menu shows the time left on the sleep timer.
+    let counting_down = matches!(ui.mode, Mode::PlaybackMenu { .. })
+        && group.is_some_and(|group| group.sleep_timer.is_some());
+    showing_error || advancing || counting_down
 }
 
 pub fn render_ui(
@@ -349,8 +370,14 @@ pub fn render_ui(
         Mode::VolumeMixer(highlighted) => {
             render_volume_mixer(state, group, theme, highlighted, frame);
         }
-        Mode::PlaybackMenu(highlighted) => {
+        Mode::PlaybackMenu {
+            highlighted,
+            sleep_timer_picker,
+        } => {
             render_playback_menu(group, symbols, theme, highlighted, frame);
+            if let Some(highlighted) = sleep_timer_picker {
+                render_sleep_timer_picker(theme, highlighted, frame);
+            }
         }
         Mode::Help => render_help(theme, frame),
         Mode::Config {

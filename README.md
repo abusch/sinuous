@@ -12,7 +12,8 @@ local network.
 ## Features
 
 - See what each group of speakers is playing, and switch between them
-- Play, pause and skip tracks, and toggle shuffle, repeat and crossfade
+- Play, pause and skip tracks, toggle shuffle, repeat and crossfade, and set a
+  sleep timer
 - Adjust the volume of a group, or of each of its speakers
 - Group and ungroup speakers
 - Play your Sonos favorites
@@ -61,7 +62,7 @@ sinuous --device "Living Room"
 | <kbd>s</kbd> / <kbd>r</kbd> | Toggle shuffle / cycle repeat (all, one, off) |
 | <kbd>[</kbd> / <kbd>]</kbd> | Volume of the group down / up |
 | <kbd>v</kbd> | Volume of the group and of each of its speakers |
-| <kbd>.</kbd> | Playback menu, e.g. to toggle crossfade |
+| <kbd>.</kbd> | Playback menu: toggle crossfade, and set the sleep timer |
 | <kbd>g</kbd> | Switch to another group, from a panel showing what each group is playing |
 | <kbd>G</kbd> | Add speakers to or remove speakers from the group |
 | <kbd>f</kbd> | Play one of your Sonos favorites |
