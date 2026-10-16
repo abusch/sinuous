@@ -116,6 +116,8 @@ pub struct GroupState {
     pub now_playing: Option<TrackInfo>,
     pub next_track: Option<TrackInfo>,
     pub source: Option<Source>,
+    /// When the sleep timer runs out, and playback fades out and pauses, if it is set.
+    pub sleep_timer: Option<Instant>,
 }
 
 impl GroupState {
@@ -135,6 +137,7 @@ impl GroupState {
             now_playing: None,
             next_track: None,
             source: None,
+            sleep_timer: None,
         }
     }
 }
@@ -304,6 +307,8 @@ pub enum GroupAction {
     /// Make these players the members of the group. The coordinator must come first.
     SetMembers(Vec<PlayerId>),
     SetPlayModes(PlayModesUpdate),
+    /// Pause after this long, or never.
+    SetSleepTimer(Option<Duration>),
 }
 
 #[derive(Debug)]
@@ -513,6 +518,11 @@ impl Service {
                             group.source = Source::new(&metadata);
                         }
                         EventPayload::GroupVolume(volume) => group.volume = Some(volume.volume),
+                        EventPayload::SleepTimerStatus(timer) => {
+                            group.sleep_timer = timer.active.then(|| {
+                                Instant::now() + timer.remaining.unwrap_or(Duration::ZERO)
+                            });
+                        }
                         _ => return false,
                     }
                     true
@@ -572,6 +582,7 @@ impl Service {
                     Subscription::Playback(group.id.clone()),
                     Subscription::PlaybackMetadata(group.id.clone()),
                     Subscription::GroupVolume(group.id.clone()),
+                    Subscription::SleepTimer(group.id.clone()),
                 ]
             });
             let players = state
@@ -645,7 +656,8 @@ impl Service {
         let name = match subscription {
             Subscription::Playback(id)
             | Subscription::PlaybackMetadata(id)
-            | Subscription::GroupVolume(id) => state.group(id).map(|g| g.name.clone()),
+            | Subscription::GroupVolume(id)
+            | Subscription::SleepTimer(id) => state.group(id).map(|g| g.name.clone()),
             Subscription::PlayerVolume(id) => state
                 .players
                 .iter()
@@ -775,6 +787,14 @@ async fn run_group_command(
             .set_play_modes(modes)
             .await
             .context("Failed to change the play modes")?,
+        GroupAction::SetSleepTimer(Some(duration)) => group
+            .set_sleep_timer(*duration)
+            .await
+            .context("Failed to set the sleep timer")?,
+        GroupAction::SetSleepTimer(None) => group
+            .cancel_sleep_timer()
+            .await
+            .context("Failed to cancel the sleep timer")?,
     }
     Ok(())
 }
@@ -904,6 +924,7 @@ fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
             group.now_playing.clone_from(&old.now_playing);
             group.next_track.clone_from(&old.next_track);
             group.source.clone_from(&old.source);
+            group.sleep_timer = old.sleep_timer;
         }
     }
 }

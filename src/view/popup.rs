@@ -1,5 +1,7 @@
 //! The popups shown in the middle of the screen.
 
+use std::time::{Duration, Instant};
+
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -13,10 +15,10 @@ use crate::sonos::{GroupState, HouseholdState};
 use crate::symbols::Symbols;
 use crate::theme::{self, THEMES, Theme};
 
-use super::PlaybackItem;
 use super::input::{Action, supports};
 use super::now_playing::{volume_slider, volume_text};
 use super::panel::speaker_name;
+use super::{PlaybackItem, SLEEP_TIMER_MINUTES};
 
 /// A popup listing the favorites, with the one at `highlighted` highlighted.
 pub(super) fn render_favorites_picker(
@@ -126,6 +128,7 @@ pub(super) fn render_playback_menu(
         .map(|item| {
             let (on, action, description) = match item {
                 PlaybackItem::Crossfade => (modes.crossfade, Action::Crossfade, "Crossfade"),
+                PlaybackItem::SleepTimer => return sleep_timer_line(group, symbols, theme),
             };
             let checkbox = if on {
                 symbols.checked
@@ -158,6 +161,64 @@ pub(super) fn render_playback_menu(
     );
 }
 
+/// The time left on the sleep timer of `group`, if it is set, lined up with the checkboxes above
+/// it.
+fn sleep_timer_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
+    let padding = Span::raw(symbols.checked)
+        .width()
+        .saturating_sub(Span::raw(symbols.sleep_timer).width());
+    let value = match group.sleep_timer {
+        Some(end) => Span::styled(
+            format!(
+                "{} left",
+                time_left(end.saturating_duration_since(Instant::now()))
+            ),
+            Style::default().fg(theme.name),
+        ),
+        None => Span::styled("off", Style::default().fg(theme.secondary)),
+    };
+    Line::from(vec![
+        Span::styled(symbols.sleep_timer, Style::default().fg(theme.secondary)),
+        Span::raw(" ".repeat(padding + 1)),
+        Span::raw("Sleep timer: "),
+        value,
+    ])
+}
+
+/// `time` as hours, minutes and seconds, or minutes and seconds if under an hour.
+fn time_left(time: Duration) -> String {
+    let secs = time.as_secs();
+    let (hours, minutes, seconds) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// A popup listing what the sleep timer can be set to, with the choice at `highlighted`
+/// highlighted.
+pub(super) fn render_sleep_timer_picker(theme: &Theme, highlighted: usize, frame: &mut Frame) {
+    let lines = SLEEP_TIMER_MINUTES
+        .into_iter()
+        .map(|minutes| match minutes {
+            None => Line::from("Off"),
+            Some(60) => Line::from("1 hour"),
+            Some(minutes) if minutes % 60 == 0 => Line::from(format!("{} hours", minutes / 60)),
+            Some(minutes) => Line::from(format!("{minutes} minutes")),
+        })
+        .collect();
+
+    render_popup(
+        frame,
+        theme,
+        " Sleep timer ",
+        lines,
+        Some(highlighted),
+        " ↑↓ Navigate • ENTER choose • ESC cancel ",
+    );
+}
+
 /// A popup listing all the keyboard shortcuts.
 pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
     // The keys to use in the other popups are shown at their bottom.
@@ -170,7 +231,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
                 ("s", "Toggle shuffle"),
                 ("r", "Cycle repeat: all, one, off"),
                 ("[ / ]", "Volume down / up"),
-                (".", "Playback menu"),
+                (".", "Playback menu: crossfade, sleep timer"),
             ],
         ),
         (
