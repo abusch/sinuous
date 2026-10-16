@@ -271,8 +271,8 @@ fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
     Line::from(spans)
 }
 
-/// The playback controls and play modes, highlighting the playback status and the play modes that
-/// are on.
+/// The playback controls between the play modes, shuffle on the left and repeat on the right,
+/// highlighting the playback status and the play modes that are on.
 fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = if is_playing {
@@ -280,28 +280,23 @@ fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'
     } else {
         symbols.paused
     };
-    let controls = [
-        (symbols.previous, false, Action::Previous),
-        (status, is_playing, Action::PlayPause),
-        (symbols.next, false, Action::Next),
-    ];
-
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     let repeat = if modes.repeat_one {
         symbols.repeat_one
     } else {
         symbols.repeat
     };
-    let modes = [
+    let items = [
         (symbols.shuffle, modes.shuffle, Action::Shuffle),
+        (symbols.previous, false, Action::Previous),
+        (status, is_playing, Action::PlayPause),
+        (symbols.next, false, Action::Next),
         (repeat, modes.repeat || modes.repeat_one, Action::Repeat),
     ];
 
     let mut spans = Vec::new();
-    for (i, (label, on, action)) in controls.into_iter().chain(modes).enumerate() {
-        if i == controls.len() {
-            spans.push(Span::styled("   │   ", Style::default().fg(theme.muted)));
-        } else if i > 0 {
+    for (i, (label, on, action)) in items.into_iter().enumerate() {
+        if i > 0 {
             spans.push(Span::raw("   "));
         }
         let style = match (supports(group, action), on) {
