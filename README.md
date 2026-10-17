@@ -16,7 +16,7 @@ local network.
   sleep timer
 - Adjust the volume of a group, or of each of its speakers
 - Group and ungroup speakers
-- Play your Sonos favorites
+- Play your Sonos favorites, and see the queue and what was played recently
 - Album art, drawn with the Kitty, iTerm2 or Sixel graphics protocols in
   terminals that support one of them, and with coloured blocks otherwise. It is
   kept in `~/.cache/sinuous/artwork` (or `$XDG_CACHE_HOME/sinuous/artwork`, or
@@ -65,13 +65,17 @@ sinuous --device "Living Room"
 | <kbd>.</kbd> | Playback menu: toggle crossfade, and set the sleep timer |
 | <kbd>g</kbd> | Switch to another group, from a panel showing what each group is playing |
 | <kbd>G</kbd> | Add speakers to or remove speakers from the group |
-| <kbd>f</kbd> | Play one of your Sonos favorites |
+| <kbd>l</kbd> | The queue of the group, in a panel |
+| <kbd>h</kbd> | What was played recently, in the same panel |
+| <kbd>f</kbd> | Play one of your Sonos favorites, from the same panel |
 | <kbd>i</kbd> | System info: the details of each speaker, for troubleshooting |
 | <kbd>,</kbd> | Settings |
 | <kbd>?</kbd> | Keyboard shortcuts |
 | <kbd>q</kbd> | Close what is open, or quit |
 
-Panels and popups show the keys to use in them at their bottom.
+Panels and popups show the keys to use in them at their bottom. In the panel
+with the queue, the history and the favorites, <kbd>Tab</kbd> switches between
+them.
 
 ## Configuration
 

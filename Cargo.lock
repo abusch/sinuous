@@ -2343,6 +2343,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2744,6 +2753,8 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "iddqd",
+ "reqwest",
+ "roxmltree",
  "rustls",
  "serde",
  "serde_json",

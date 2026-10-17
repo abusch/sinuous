@@ -18,11 +18,13 @@ use sinuous_client::{
     Topology,
     favorites::Favorite,
     hardware_status::{BatteryStatus, WirelessNetworkStatus},
+    history::HistoryItem,
     playback::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
         PlaybackStatus,
     },
     playback_metadata::{ImageUrl, MetadataStatus, QueueItem, Tag, Track},
+    queue::Queue,
 };
 use tokio::{
     select,
@@ -39,6 +41,8 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Commands sent while this many are still waiting to run are dropped.
 const COMMAND_QUEUE_SIZE: usize = 16;
+/// The lists of the household the service keeps up to date.
+const HOUSEHOLD_SUBSCRIPTIONS: [Subscription; 2] = [Subscription::Favorites, Subscription::History];
 
 /// The speakers to connect to, as given on the command line or in the configuration file.
 #[derive(Debug, Default)]
@@ -73,6 +77,11 @@ pub struct HouseholdState {
     /// Sorted by name.
     pub players: Vec<PlayerInfo>,
     pub favorites: Arc<[Favorite]>,
+    /// What was played recently, most recent first.
+    pub history: Arc<[HistoryItem]>,
+    /// The queue of the group the UI watches (see [`SonosHandle::watch_queue`]), or of the last
+    /// one it watched.
+    pub queue: Option<GroupQueue>,
     pub last_error: Option<ErrorMessage>,
 }
 
@@ -86,6 +95,37 @@ impl HouseholdState {
         self.players
             .iter()
             .filter(|p| group.player_ids.contains(&p.id))
+    }
+}
+
+/// The queue of a group.
+#[derive(Debug, Clone)]
+pub struct GroupQueue {
+    pub group: GroupId,
+    pub contents: QueueContents,
+}
+
+#[derive(Debug, Clone)]
+pub enum QueueContents {
+    Loading,
+    Loaded(Arc<Queue>),
+    Failed,
+}
+
+impl GroupQueue {
+    /// The queue of `group`, as far as it is known.
+    pub fn of<'a>(queue: Option<&'a Self>, group: &GroupId) -> &'a QueueContents {
+        match queue {
+            Some(queue) if queue.group == *group => &queue.contents,
+            _ => &QueueContents::Loading,
+        }
+    }
+
+    fn loaded(&self) -> Option<&Queue> {
+        match &self.contents {
+            QueueContents::Loaded(queue) => Some(queue),
+            QueueContents::Loading | QueueContents::Failed => None,
+        }
     }
 }
 
@@ -119,6 +159,11 @@ pub struct GroupState {
     pub source: Option<Source>,
     /// When the sleep timer runs out, and playback fades out and pauses, if it is set.
     pub sleep_timer: Option<Instant>,
+    /// The version of the queue it plays from, if it plays from its queue (see
+    /// [`Queue::version`]).
+    pub queue_version: Option<String>,
+    /// The position in its queue of the current track, from 1, if it plays from its queue.
+    pub queue_position: Option<u32>,
 }
 
 impl GroupState {
@@ -139,7 +184,14 @@ impl GroupState {
             next_track: None,
             source: None,
             sleep_timer: None,
+            queue_version: None,
+            queue_position: None,
         }
+    }
+
+    /// Whether it plays from `queue`, which is then up to date.
+    pub fn plays_from(&self, queue: &Queue) -> bool {
+        self.queue_version.as_deref() == Some(queue.version.as_str())
     }
 }
 
@@ -361,6 +413,7 @@ impl Command {
 pub struct SonosHandle {
     state_rx: watch::Receiver<HouseholdState>,
     cmd_tx: mpsc::Sender<Command>,
+    watched_queue_tx: watch::Sender<Option<GroupId>>,
 }
 
 impl SonosHandle {
@@ -378,6 +431,19 @@ impl SonosHandle {
             warn!(%err, "Dropping command");
         }
     }
+
+    /// Keep the queue of `group` up to date in [`HouseholdState::queue`], or stop if `None`.
+    ///
+    /// Queues can be long, so they are only read while they are looked at. A queue starts being
+    /// read again whenever it is watched again, as changes to it are only reported while its group
+    /// plays from it.
+    pub fn watch_queue(&self, group: Option<GroupId>) {
+        self.watched_queue_tx.send_if_modified(|watched| {
+            let changed = *watched != group;
+            *watched = group;
+            changed
+        });
+    }
 }
 
 /// Start the service in the background.
@@ -389,13 +455,18 @@ pub fn spawn(household: Household) -> SonosHandle {
         ..HouseholdState::default()
     });
     let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_SIZE);
+    let (watched_queue_tx, watched_queue_rx) = watch::channel(None);
 
     tokio::spawn(run_commands(household.clone(), cmd_rx, state_tx.clone()));
-    let mut service = Service::new(household, state_tx);
+    let mut service = Service::new(household, state_tx, watched_queue_rx);
     service.update_groups();
     tokio::spawn(service.run());
 
-    SonosHandle { state_rx, cmd_tx }
+    SonosHandle {
+        state_rx,
+        cmd_tx,
+        watched_queue_tx,
+    }
 }
 
 /// Keeps the [`HouseholdState`] up to date.
@@ -411,13 +482,25 @@ struct Service {
     /// The subscriptions that failed last time, and have been reported: they are retried until they
     /// succeed, without reporting them again.
     failing: HashSet<Subscription>,
-    favorites_subscribed: bool,
+    /// The subscriptions to the lists of the household made, among
+    /// [`HOUSEHOLD_SUBSCRIPTIONS`].
+    household_subscribed: HashSet<Subscription>,
     /// The version of the favorites in the state.
     favorites_version: Option<String>,
+    /// The version of the history in the state.
+    history_version: Option<String>,
+    /// The group whose queue to keep up to date, if any.
+    watched_queue_rx: watch::Receiver<Option<GroupId>>,
+    /// The queue being read, if any.
+    queue_reads: JoinSet<(GroupId, Result<Queue, sinuous_client::Error>)>,
 }
 
 impl Service {
-    fn new(household: Household, state_tx: watch::Sender<HouseholdState>) -> Self {
+    fn new(
+        household: Household,
+        state_tx: watch::Sender<HouseholdState>,
+        watched_queue_rx: watch::Receiver<Option<GroupId>>,
+    ) -> Self {
         Self {
             // Before subscribing to anything, so that we get the initial events.
             events: household.events(),
@@ -427,14 +510,17 @@ impl Service {
             subscribed: HashSet::new(),
             subscriptions: JoinSet::new(),
             failing: HashSet::new(),
-            favorites_subscribed: false,
+            household_subscribed: HashSet::new(),
             favorites_version: None,
+            history_version: None,
+            watched_queue_rx,
+            queue_reads: JoinSet::new(),
         }
     }
 
     async fn run(mut self) {
-        // The favorites get loaded when the initial event arrives.
-        self.subscribe_to_favorites().await;
+        // The favorites and the history get loaded when the initial events arrive.
+        self.subscribe_to_household().await;
 
         let mut retry = time::interval_at(time::Instant::now() + RETRY_INTERVAL, RETRY_INTERVAL);
         retry.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -458,6 +544,13 @@ impl Service {
                     self.update_groups();
                 }
                 Some(result) = self.subscriptions.join_next() => self.subscription_done(result),
+                changed = self.watched_queue_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    self.watch_queue();
+                }
+                Some(result) = self.queue_reads.join_next() => self.queue_read(result),
                 _ = retry.tick() => self.retry_subscriptions().await,
                 () = self.state_tx.closed() => {
                     debug!("UI is gone: exiting...");
@@ -472,6 +565,9 @@ impl Service {
         match event.payload {
             EventPayload::VersionChanged(changed) if event.namespace == "favorites" => {
                 self.load_favorites(changed.version).await;
+            }
+            EventPayload::VersionChanged(changed) if event.namespace == "history" => {
+                self.load_history(changed.version).await;
             }
             EventPayload::PlaybackError(err) => self.report_error(format!(
                 "Playback error: {}",
@@ -496,6 +592,7 @@ impl Service {
             }
             payload => {
                 let Some(id) = event.group_id else { return };
+                let mut queue_changed = false;
                 self.state_tx.send_if_modified(|state| {
                     let Some(group) = state.groups.iter_mut().find(|g| g.id == id) else {
                         return false;
@@ -503,6 +600,20 @@ impl Service {
                     match payload {
                         EventPayload::PlaybackStatus(status) => {
                             group.playback = Some(Playback::new(&status, Instant::now()));
+                            group.queue_position = status
+                                .queue_version
+                                .as_ref()
+                                .and(status.item_id.as_deref())
+                                .and_then(|item| item.parse().ok());
+                            group.queue_version = status.queue_version;
+                            queue_changed = group.queue_version.as_ref().is_some_and(|version| {
+                                state
+                                    .queue
+                                    .as_ref()
+                                    .filter(|queue| queue.group == id)
+                                    .and_then(GroupQueue::loaded)
+                                    .is_some_and(|queue| queue.version != *version)
+                            });
                         }
                         EventPayload::MetadataStatus(metadata) => {
                             // Images served by the coordinator are given relative to it.
@@ -539,8 +650,78 @@ impl Service {
                     }
                     true
                 });
+                if queue_changed && self.watched_queue_rx.borrow().as_ref() == Some(&id) {
+                    self.read_queue(id);
+                }
             }
         }
+    }
+
+    /// Start reading the queue of the group now watched, if any.
+    fn watch_queue(&mut self) {
+        self.queue_reads.abort_all();
+        let watched = self.watched_queue_rx.borrow_and_update().clone();
+        if let Some(group) = watched {
+            self.read_queue(group);
+        }
+    }
+
+    /// Read the queue of `group` in the background, keeping what is known of it until then.
+    fn read_queue(&mut self, group: GroupId) {
+        debug!(%group, "Reading queue");
+        self.queue_reads.abort_all();
+        self.state_tx.send_if_modified(|state| {
+            if state
+                .queue
+                .as_ref()
+                .is_some_and(|queue| queue.group == group)
+            {
+                return false;
+            }
+            state.queue = Some(GroupQueue {
+                group: group.clone(),
+                contents: QueueContents::Loading,
+            });
+            true
+        });
+        let household = self.household.clone();
+        self.queue_reads.spawn(async move {
+            let queue = match household.group(&group).await {
+                Ok(handle) => handle.get_queue().await,
+                Err(err) => Err(err),
+            };
+            (group, queue)
+        });
+    }
+
+    fn queue_read(
+        &mut self,
+        result: Result<(GroupId, Result<Queue, sinuous_client::Error>), JoinError>,
+    ) {
+        let (group, queue) = match result {
+            Ok(read) => read,
+            Err(err) if err.is_cancelled() => return,
+            Err(err) => return error!("Queue reading task failed: {err}"),
+        };
+        let contents = match queue {
+            Ok(queue) => {
+                debug!(%group, tracks = queue.items.len(), version = queue.version, "Read queue");
+                QueueContents::Loaded(Arc::new(queue))
+            }
+            Err(err) => {
+                self.report_error(format!("Failed to read the queue: {err}"));
+                QueueContents::Failed
+            }
+        };
+        self.state_tx.send_modify(|state| match &mut state.queue {
+            // Keep showing the queue as it was when it can't be read again.
+            Some(queue) if queue.group == group && matches!(contents, QueueContents::Failed) => {
+                if matches!(queue.contents, QueueContents::Loading) {
+                    queue.contents = contents;
+                }
+            }
+            queue => *queue = Some(GroupQueue { group, contents }),
+        });
     }
 
     async fn load_favorites(&mut self, version: String) {
@@ -561,6 +742,27 @@ impl Service {
                 });
             }
             Err(err) => self.report_error(format!("Failed to fetch favorites: {err}")),
+        }
+    }
+
+    async fn load_history(&mut self, version: String) {
+        if self.history_version.as_ref() == Some(&version) {
+            return;
+        }
+        debug!("Fetching history...");
+        let history = match self.household.connection().await {
+            Ok(conn) => conn.get_history().await,
+            Err(err) => Err(err),
+        };
+        match history {
+            Ok(history) => {
+                info!("Found {} items in the history", history.items.len());
+                self.history_version = Some(version);
+                self.state_tx.send_modify(|state| {
+                    state.history = history.items.into();
+                });
+            }
+            Err(err) => self.report_error(format!("Failed to fetch the history: {err}")),
         }
     }
 
@@ -607,7 +809,7 @@ impl Service {
         };
         self.subscribed.retain(|s| wanted.contains(s));
         self.failing
-            .retain(|s| *s == Subscription::Favorites || wanted.contains(s));
+            .retain(|s| HOUSEHOLD_SUBSCRIPTIONS.contains(s) || wanted.contains(s));
         for subscription in wanted {
             if !self.subscribed.insert(subscription.clone()) {
                 continue;
@@ -642,16 +844,28 @@ impl Service {
         }
     }
 
-    async fn subscribe_to_favorites(&mut self) {
-        match self.household.subscribe(&Subscription::Favorites).await {
-            Ok(()) => {
-                self.favorites_subscribed = true;
-                self.failing.remove(&Subscription::Favorites);
+    /// Subscribe to the lists of the household we haven't subscribed to yet.
+    async fn subscribe_to_household(&mut self) {
+        for subscription in HOUSEHOLD_SUBSCRIPTIONS {
+            if self.household_subscribed.contains(&subscription) {
+                continue;
             }
-            Err(err) => self.subscription_failed(
-                Subscription::Favorites,
-                format!("Failed to get updates to favorites: {err}"),
-            ),
+            match self.household.subscribe(&subscription).await {
+                Ok(()) => {
+                    self.failing.remove(&subscription);
+                    self.household_subscribed.insert(subscription);
+                }
+                Err(err) => {
+                    let list = match subscription {
+                        Subscription::History => "the history",
+                        _ => "favorites",
+                    };
+                    self.subscription_failed(
+                        subscription,
+                        format!("Failed to get updates to {list}: {err}"),
+                    );
+                }
+            }
         }
     }
 
@@ -684,9 +898,7 @@ impl Service {
 
     async fn retry_subscriptions(&mut self) {
         self.subscribe_to_members();
-        if !self.favorites_subscribed {
-            self.subscribe_to_favorites().await;
-        }
+        self.subscribe_to_household().await;
     }
 
     /// Subscribe to everything again, to catch up with missed events: subscribing makes the
@@ -694,8 +906,9 @@ impl Service {
     async fn resync(&mut self) {
         debug!("Resyncing");
         self.subscribed.clear();
+        self.household_subscribed.clear();
         self.subscribe_to_members();
-        self.subscribe_to_favorites().await;
+        self.subscribe_to_household().await;
     }
 
     fn report_error(&self, message: String) {
@@ -941,6 +1154,8 @@ fn keep_group_states(groups: &mut [GroupState], old_groups: &[GroupState]) {
             group.next_track.clone_from(&old.next_track);
             group.source.clone_from(&old.source);
             group.sleep_timer = old.sleep_timer;
+            group.queue_version.clone_from(&old.queue_version);
+            group.queue_position = old.queue_position;
         }
     }
 }

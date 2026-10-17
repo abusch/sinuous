@@ -15,8 +15,8 @@ use crate::sonos::{Command, GroupAction, GroupState, HouseholdState, PlayerActio
 use crate::theme::THEMES;
 
 use super::{
-    GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, SLEEP_TIMER_MINUTES, Scroll,
-    Selection, UiState,
+    Browser, GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, SLEEP_TIMER_MINUTES, Scroll,
+    Selection, Tab, UiState,
 };
 
 /// How much the volume changes with each key press.
@@ -29,6 +29,20 @@ fn navigate(key: KeyCode, highlighted: usize, len: usize) -> Option<usize> {
         KeyCode::Up | KeyCode::Char('k') => Some(highlighted.saturating_sub(1)),
         KeyCode::Down | KeyCode::Char('j') => Some((highlighted + 1).min(len.saturating_sub(1))),
         _ => None,
+    }
+}
+
+/// Like [`navigate`], in a list in the panel on the left with `highlight` highlighted, also moving
+/// by pages, and to the first and last rows.
+fn navigate_panel(key: KeyCode, highlight: PanelHighlight, len: usize) -> Option<usize> {
+    let page = highlight.shown.max(1);
+    let last = len.saturating_sub(1);
+    match key {
+        KeyCode::PageUp => Some(highlight.item.saturating_sub(page)),
+        KeyCode::PageDown => Some(highlight.item.saturating_add(page).min(last)),
+        KeyCode::Home => Some(0),
+        KeyCode::End => Some(last),
+        key => navigate(key, highlight.item, len),
     }
 }
 
@@ -53,9 +67,7 @@ pub fn handle_input(
             None
         }
         Mode::GroupEditor(_) => handle_group_editor_input(input, state, ui),
-        Mode::FavoritesPicker(highlighted) => {
-            handle_favorites_picker_input(input, state, ui, highlighted)
-        }
+        Mode::Browser(_) => handle_browser_input(input, state, ui),
         Mode::VolumeMixer(highlighted) => handle_volume_mixer_input(input, state, ui, highlighted),
         Mode::PlaybackMenu {
             highlighted,
@@ -95,7 +107,9 @@ fn handle_now_playing_input(
     ui: &mut UiState,
 ) -> Option<Command> {
     ui.mode = match input.code {
-        KeyCode::Char('f') => Mode::FavoritesPicker(0),
+        KeyCode::Char(key) if let Some(tab) = Tab::ALL.into_iter().find(|t| t.key() == key) => {
+            Mode::Browser(Browser::new(tab))
+        }
 
         // Group switching
         KeyCode::Char('g') => Mode::GroupPicker(PanelHighlight::new(ui.current_group(state)?.0)),
@@ -409,29 +423,39 @@ fn handle_sleep_timer_picker_input(
     }
 }
 
-/// Update `ui` according to the key pressed while the favorites picker is open, with the favorite
-/// at index `highlighted` highlighted, and return the command playing the favorite, if any.
-fn handle_favorites_picker_input(
+/// Update `ui` according to the key pressed while the browser is open, and return the command
+/// playing the highlighted favorite, if any.
+fn handle_browser_input(
     input: &KeyEvent,
     state: &HouseholdState,
     ui: &mut UiState,
-    highlighted: usize,
 ) -> Option<Command> {
-    if let Some(highlighted) = navigate(input.code, highlighted, state.favorites.len()) {
-        ui.mode = Mode::FavoritesPicker(highlighted);
+    let (_, group) = ui.current_group(state)?;
+    let Mode::Browser(browser) = &mut ui.mode else {
+        return None;
+    };
+    let len = browser.tab.len(state, group);
+    if let Some(item) = navigate_panel(input.code, browser.highlight, len) {
+        browser.highlight.item = item;
         return None;
     }
     match input.code {
-        KeyCode::Enter => {
+        KeyCode::Tab | KeyCode::Right => *browser = Browser::new(browser.tab.cycle(1)),
+        KeyCode::BackTab | KeyCode::Left => *browser = Browser::new(browser.tab.cycle(-1)),
+        // The key opening a tab switches to it, or closes the browser from it.
+        KeyCode::Char(key) if key == browser.tab.key() => ui.mode = Mode::NowPlaying,
+        KeyCode::Char(key) if let Some(tab) = Tab::ALL.into_iter().find(|t| t.key() == key) => {
+            *browser = Browser::new(tab);
+        }
+        KeyCode::Enter if browser.tab == Tab::Favorites => {
+            let favorite = state.favorites.get(browser.highlight.item)?;
             ui.mode = Mode::NowPlaying;
-            let favorite = state.favorites.get(highlighted)?;
-            let (_, group) = ui.current_group(state)?;
             return Some(Command::Group {
                 group: group.id.clone(),
                 action: GroupAction::LoadFavorite(favorite.id.clone()),
             });
         }
-        KeyCode::Esc | KeyCode::Char('f') => ui.mode = Mode::NowPlaying,
+        KeyCode::Esc => ui.mode = Mode::NowPlaying,
         _ => {}
     }
     None
@@ -704,7 +728,7 @@ mod tests {
         let mut ui = UiState::default();
         ui.sync(&state);
 
-        for opening in [',', 'v', '.', 'f', 'g', 'G', 'i', '?'] {
+        for opening in [',', 'v', '.', 'f', 'h', 'l', 'g', 'G', 'i', '?'] {
             assert!(press(&[KeyCode::Char(opening)], &state, &mut ui).is_none());
             assert!(!matches!(ui.mode, Mode::NowPlaying), "{opening}");
             assert!(press(&[KeyCode::Char('q')], &state, &mut ui).is_none());
@@ -819,6 +843,57 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn browser_switches_tabs_and_plays_favorites() {
+        let mut state = household();
+        state.favorites = ["Morning", "Evening"]
+            .map(|name| {
+                serde_json::from_value(serde_json::json!({
+                    "_objectType": "favorite",
+                    "id": name.to_lowercase(),
+                    "name": name,
+                }))
+                .unwrap()
+            })
+            .into();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let tab = |ui: &UiState| match &ui.mode {
+            Mode::Browser(browser) => Some(browser.tab),
+            _ => None,
+        };
+
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        assert_eq!(tab(&ui), Some(Tab::Queue));
+        // Nothing to play from the queue
+        assert!(press(&[KeyCode::Enter], &state, &mut ui).is_none());
+        press(&[KeyCode::BackTab], &state, &mut ui);
+        assert_eq!(tab(&ui), Some(Tab::Favorites));
+        press(&[KeyCode::Right], &state, &mut ui);
+        assert_eq!(tab(&ui), Some(Tab::Queue));
+        press(&[KeyCode::Char('h')], &state, &mut ui);
+        assert_eq!(tab(&ui), Some(Tab::History));
+        // The key of the current tab closes it.
+        press(&[KeyCode::Char('h')], &state, &mut ui);
+        assert_eq!(tab(&ui), None);
+
+        let request = press(
+            &[KeyCode::Char('f'), KeyCode::End, KeyCode::Enter],
+            &state,
+            &mut ui,
+        );
+        let Some(Request::Speakers(Command::Group {
+            group,
+            action: GroupAction::LoadFavorite(favorite),
+        })) = request
+        else {
+            panic!("Unexpected request: {request:?}");
+        };
+        assert_eq!(group, GroupId::from("bedroom"));
+        assert_eq!(favorite, "evening".into());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 
     #[test]

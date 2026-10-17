@@ -1,4 +1,4 @@
-//! The panel on the left, listing the groups or the speakers of one.
+//! The panel on the left, listing the groups, the speakers of one, or things played or to play.
 
 use ratatui::{
     Frame,
@@ -8,11 +8,21 @@ use ratatui::{
     widgets::{Block, BorderType::Rounded, Padding, Paragraph},
 };
 
-use crate::sonos::{GroupState, HouseholdState, PlayerInfo};
+use sinuous_client::{
+    favorites::Favorite,
+    history::{ContentType, HistoryItem},
+    queue::QueueEntry,
+};
+
+use crate::sonos::{GroupQueue, GroupState, HouseholdState, PlayerInfo, QueueContents};
 use crate::symbols::Symbols;
 use crate::theme::Theme;
 
-use super::{GROUP_EDITOR_HELP, GROUP_PANEL_HELP, GroupEditor, PanelHighlight};
+use super::now_playing::format_duration;
+use super::{
+    BROWSER_HELP, Browser, FAVORITES_HELP, GROUP_EDITOR_HELP, GROUP_PANEL_HELP, GroupEditor,
+    PanelHighlight, Tab,
+};
 
 /// How many lines each group takes in the group panel.
 const GROUP_HEIGHT: u16 = 3;
@@ -38,21 +48,25 @@ pub(super) fn render_group_panel(
         frame,
         theme,
         area,
-        " Groups ",
+        Line::from(" Groups "),
         GROUP_PANEL_HELP,
+        None,
         items,
         highlight,
     );
 }
 
 /// A panel titled `title` in `area`, listing `items` a line apart, scrolled so that the one at
-/// `highlight` is shown, and highlighted, with the keys to use (`help`) at the bottom.
+/// `highlight` is shown, and highlighted, with the keys to use (`help`) at the bottom, and `note`
+/// above the items, if any.
+#[expect(clippy::too_many_arguments)]
 fn render_panel<const N: usize>(
     frame: &mut Frame,
     theme: &Theme,
     area: Rect,
-    title: &str,
+    title: Line,
     help: &str,
+    note: Option<Line>,
     items: Vec<[Line; N]>,
     highlight: &mut PanelHighlight,
 ) {
@@ -66,8 +80,21 @@ fn render_panel<const N: usize>(
         .padding(Padding::vertical(1))
         .title_top(title)
         .title_bottom(help);
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(note) = note {
+        let [note_area, _, rest] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+        // Lined up with the items, after the room for the bar
+        let [_, note_area] =
+            Layout::horizontal([Constraint::Length(2), Constraint::Fill(1)]).areas(note_area);
+        frame.render_widget(note, note_area);
+        inner = rest;
+    }
 
     // Items are a line apart, and scrolled so that the highlighted one is shown.
     let item_height = u16::try_from(N).unwrap_or(u16::MAX);
@@ -76,6 +103,7 @@ fn render_panel<const N: usize>(
     let PanelHighlight {
         item: highlighted,
         first,
+        ..
     } = *highlight;
     let rows = (inner.y..).step_by(usize::from(item_height + 1));
     for ((i, lines), y) in items.into_iter().enumerate().skip(first).zip(rows) {
@@ -190,8 +218,9 @@ pub(super) fn render_group_editor(
         frame,
         theme,
         area,
-        " Group speakers ",
+        Line::from(" Group speakers "),
         GROUP_EDITOR_HELP,
+        None,
         items,
         &mut editor.highlight,
     );
@@ -257,4 +286,198 @@ pub(super) fn speaker_name<'a>(
         ));
     }
     spans
+}
+
+/// A panel in `area` listing what the browser's tab shows, with tabs as its title.
+pub(super) fn render_browser(
+    state: &HouseholdState,
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    browser: &mut Browser,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let muted = Style::default().fg(theme.muted);
+    let mut tabs = vec![Span::raw(" ")];
+    for (i, tab) in Tab::ALL.into_iter().enumerate() {
+        if i > 0 {
+            tabs.push(Span::styled(" · ", muted));
+        }
+        let style = if tab == browser.tab {
+            Style::default()
+                .fg(theme.title)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.secondary)
+        };
+        tabs.push(Span::styled(tab.title(), style));
+    }
+    tabs.push(Span::raw(" "));
+    let title = Line::from(tabs);
+
+    let (help, note, items) = match browser.tab {
+        Tab::Queue => {
+            let (note, items) = match GroupQueue::of(state.queue.as_ref(), &group.id) {
+                QueueContents::Loading => (Some("Reading the queue…"), Vec::new()),
+                QueueContents::Failed => (Some("Failed to read the queue"), Vec::new()),
+                QueueContents::Loaded(queue) if queue.items.is_empty() => {
+                    (Some("The queue is empty"), Vec::new())
+                }
+                QueueContents::Loaded(queue) => {
+                    let current = group.queue_position.filter(|_| group.plays_from(queue));
+                    let items = queue
+                        .items
+                        .iter()
+                        .map(|entry| queue_entry_lines(entry, current, symbols, theme))
+                        .collect();
+                    // The queue keeps what was last played from it.
+                    let note = current.is_none().then_some("Not playing from the queue");
+                    (note, items)
+                }
+            };
+            (BROWSER_HELP, note, items)
+        }
+        Tab::History => {
+            let items: Vec<_> = state
+                .history
+                .iter()
+                .map(|item| history_lines(item, symbols, theme))
+                .collect();
+            let note = items.is_empty().then_some("Nothing played recently");
+            (BROWSER_HELP, note, items)
+        }
+        Tab::Favorites => {
+            let items: Vec<_> = state
+                .favorites
+                .iter()
+                .map(|favorite| favorite_lines(favorite, symbols, theme))
+                .collect();
+            let note = items.is_empty().then_some("No favorites");
+            (FAVORITES_HELP, note, items)
+        }
+    };
+    render_panel(
+        frame,
+        theme,
+        area,
+        title,
+        help,
+        note.map(|note| Line::styled(note, muted)),
+        items,
+        &mut browser.highlight,
+    );
+}
+
+/// The lines showing `entry` of a queue: its title, then its artist, album and duration. The
+/// track at position `current`, if any, is marked as playing.
+fn queue_entry_lines<'a>(
+    entry: &'a QueueEntry,
+    current: Option<u32>,
+    symbols: &Symbols,
+    theme: &Theme,
+) -> [Line<'a>; 2] {
+    let muted = Style::default().fg(theme.muted);
+    let mut title_style = Style::default().add_modifier(Modifier::BOLD);
+    let mut title_line = Vec::new();
+    if current == Some(entry.position) {
+        title_style = title_style.fg(theme.name);
+        title_line.push(Span::styled(
+            format!("{} ", symbols.playing),
+            Style::default().fg(theme.on),
+        ));
+    }
+    title_line.push(Span::styled(
+        entry.name.as_deref().unwrap_or("Unknown title"),
+        title_style,
+    ));
+
+    let mut details = vec![Span::styled(
+        entry.artist.as_deref().unwrap_or("Unknown artist"),
+        Style::default().fg(theme.artist),
+    )];
+    if let Some(album) = &entry.album {
+        details.push(Span::styled(" · ", muted));
+        details.push(Span::styled(
+            album.as_str(),
+            Style::default().fg(theme.secondary),
+        ));
+    }
+    if let Some(millis) = entry.duration_millis {
+        let secs = u32::try_from(millis / 1000).unwrap_or(u32::MAX);
+        details.push(Span::styled(" · ", muted));
+        details.push(Span::styled(format_duration(secs), muted));
+    }
+
+    [Line::from(title_line), Line::from(details)]
+}
+
+/// The lines showing `item` of the history: its name, then what it is.
+fn history_lines<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
+    let mut name_line = vec![Span::styled(
+        item.name.as_str(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
+    if item.explicit {
+        name_line.push(Span::raw(" "));
+        name_line.push(Span::styled(" E ", theme.badge));
+    }
+    let kind = match item.r#type {
+        ContentType::Album => symbols.album,
+        ContentType::Playlist => symbols.playlist,
+        ContentType::Program => symbols.radio,
+        ContentType::Other | ContentType::Unknown => "Other",
+    };
+    [
+        Line::from(name_line),
+        Line::styled(kind, Style::default().fg(theme.secondary)),
+    ]
+}
+
+/// The lines showing `favorite`: its name, then its music service, what it is, and its
+/// description.
+fn favorite_lines<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
+    let muted = Style::default().fg(theme.muted);
+    let service = favorite
+        .service
+        .as_ref()
+        .map(|service| service.name.as_str());
+    let kind = favorite
+        .resource
+        .as_ref()
+        .and_then(|resource| resource.r#type.as_deref())
+        .and_then(|kind| match kind.to_lowercase().as_str() {
+            "album" => Some(symbols.album),
+            "artist" => Some(symbols.artist),
+            "playlist" => Some(symbols.playlist),
+            "station" | "program" => Some(symbols.radio),
+            "show" | "podcast" => Some(symbols.podcast),
+            _ => None,
+        });
+    // Descriptions are often the name of the service.
+    let description = favorite
+        .description
+        .as_deref()
+        .filter(|description| Some(*description) != service);
+
+    let mut details = Vec::new();
+    if let Some(service) = service {
+        details.push(Span::styled(
+            symbols.service(service),
+            Style::default().fg(theme.secondary),
+        ));
+    }
+    for text in [kind, description].into_iter().flatten() {
+        if !details.is_empty() {
+            details.push(Span::styled(" · ", muted));
+        }
+        details.push(Span::styled(text, muted));
+    }
+    [
+        Line::styled(
+            favorite.name.as_str(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(details),
+    ]
 }

@@ -491,7 +491,7 @@ pub(super) fn sleep_timer_text(end: Instant) -> String {
     }
 }
 
-fn format_duration(secs: u32) -> String {
+pub(super) fn format_duration(secs: u32) -> String {
     let minutes = secs / 60;
     let seconds = secs % 60;
 
