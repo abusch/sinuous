@@ -1144,6 +1144,35 @@ mod tests {
     }
 
     #[test]
+    fn next_track_is_not_shown_when_it_is_the_one_playing() {
+        use crate::sonos::TrackInfo;
+
+        let track = |title: &str| TrackInfo {
+            title: Some(title.to_owned()),
+            artist: Some("Candlemass".to_owned()),
+            album_explicit: false,
+            duration_secs: None,
+            image_url: None,
+        };
+        let mut state = household();
+        state.groups[0].now_playing = Some(track("Bewitched"));
+        state.groups[0].next_track = Some(track("Solitude"));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Next: Solitude by Candlemass"))
+        );
+
+        // As radio stations report it
+        state.groups[0].next_track = Some(track("Bewitched"));
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("Bewitched")));
+        assert!(!rows.iter().any(|row| row.contains("Next:")));
+    }
+
+    #[test]
     fn panel_scrolls_as_little_as_possible() {
         let mut highlight = PanelHighlight::new(0);
         let mut firsts = Vec::new();
