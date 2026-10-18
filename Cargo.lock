@@ -2746,9 +2746,9 @@ dependencies = [
 
 [[package]]
 name = "sinuous-client"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5430ac3a5ee9bac0f19e130afc598c7e6dfd79756fa4daeceae7eb77d53c8f88"
+checksum = "d44534eca642473de224e22349dcbb33456d562e45d46b3b4ef34ade08944de9"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
