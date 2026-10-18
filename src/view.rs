@@ -8,12 +8,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType::Rounded, Paragraph, Wrap},
 };
-use sinuous_client::{GroupId, PlayerId};
+use sinuous_client::{
+    GroupId, PlayerId,
+    history::{ContentType, HistoryItem},
+};
 use url::Url;
 
 use crate::artwork::Artwork;
 use crate::config::{UiConfig, UiSetting};
-use crate::sonos::{Command, ErrorMessage, GroupQueue, GroupState, HouseholdState, QueueContents};
+use crate::sonos::{
+    Command, ErrorMessage, GroupAction, GroupQueue, GroupState, HouseholdState, QueueContents,
+};
 use crate::symbols::Symbols;
 use crate::theme::{THEMES, Theme};
 
@@ -40,12 +45,12 @@ const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 const GROUP_PANEL_MIN_WIDTH: u16 = 34;
 const GROUP_PANEL_MAX_WIDTH: u16 = 48;
 
-/// The keys to use in the group panel, in the group editor, and in the browser (on the favorites
-/// tab, and on the others).
+/// The keys to use in the group panel, in the group editor, and in the browser (and on the queue
+/// tab while the group doesn't play from its queue, which has nothing to play).
 const GROUP_PANEL_HELP: &str = " ↑↓ • ENTER select • ESC close ";
 const GROUP_EDITOR_HELP: &str = " ↑↓ • SPACE toggle • ENTER apply • ESC cancel ";
-const FAVORITES_HELP: &str = " TAB switch • ↑↓ • ENTER play • ESC close ";
-const BROWSER_HELP: &str = " TAB switch • ↑↓ • ESC close ";
+const BROWSER_HELP: &str = " TAB switch • ↑↓ • ENTER play • ESC close ";
+const BROWSER_VIEW_HELP: &str = " TAB switch • ↑↓ • ESC close ";
 
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
@@ -65,7 +70,7 @@ enum Mode {
     GroupPicker(PanelHighlight),
     /// The group editor, in the panel on the left.
     GroupEditor(GroupEditor),
-    /// The queue, the history or the favorites, in the panel on the left.
+    /// The queue, the history, the favorites or the playlists, in the panel on the left.
     Browser(Browser),
     /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
     VolumeMixer(usize),
@@ -178,16 +183,19 @@ enum Tab {
     /// What was played recently in the household.
     History,
     Favorites,
+    /// The Sonos playlists of the household.
+    Playlists,
 }
 
 impl Tab {
-    const ALL: [Self; 3] = [Self::Queue, Self::History, Self::Favorites];
+    const ALL: [Self; 4] = [Self::Queue, Self::History, Self::Favorites, Self::Playlists];
 
     fn title(self) -> &'static str {
         match self {
             Self::Queue => "Queue",
             Self::History => "History",
             Self::Favorites => "Favorites",
+            Self::Playlists => "Playlists",
         }
     }
 
@@ -197,6 +205,7 @@ impl Tab {
             Self::Queue => 'l',
             Self::History => 'h',
             Self::Favorites => 'f',
+            Self::Playlists => 'P',
         }
     }
 
@@ -218,11 +227,43 @@ impl Tab {
             },
             Self::History => state.history.len(),
             Self::Favorites => state.favorites.len(),
+            Self::Playlists => state.playlists.len(),
         }
+    }
+
+    /// What playing the item at `index` in `group` does, if it can be played.
+    fn play(self, index: usize, state: &HouseholdState, group: &GroupState) -> Option<GroupAction> {
+        let action = match self {
+            // Skipping to a track only works while the group plays from its queue.
+            Self::Queue => match GroupQueue::of(state.queue.as_ref(), &group.id) {
+                QueueContents::Loaded(queue) if group.plays_from(queue) => {
+                    GroupAction::SkipToTrack(queue.items.get(index)?.position)
+                }
+                QueueContents::Loaded(_) | QueueContents::Loading | QueueContents::Failed => {
+                    return None;
+                }
+            },
+            Self::History => {
+                let item = state
+                    .history
+                    .get(index)
+                    .filter(|item| can_play_again(item))?;
+                GroupAction::LoadContent(item.id.clone(), item.r#type)
+            }
+            Self::Favorites => GroupAction::LoadFavorite(state.favorites.get(index)?.id.clone()),
+            Self::Playlists => GroupAction::LoadPlaylist(state.playlists.get(index)?.id.clone()),
+        };
+        Some(action)
     }
 }
 
-/// The queue, the history or the favorites, in tabs.
+/// Whether `item` of the history can be played again.
+fn can_play_again(item: &HistoryItem) -> bool {
+    // What the type of the content is needs to be given to play it.
+    item.playable && item.r#type != ContentType::Unknown
+}
+
+/// The queue, the history, the favorites or the playlists, in tabs.
 #[derive(Debug)]
 struct Browser {
     tab: Tab,
@@ -441,7 +482,7 @@ pub fn render_ui(
     let panel_help = match ui.mode {
         Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
         Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
-        Mode::Browser(_) => Some(FAVORITES_HELP),
+        Mode::Browser(_) => Some(BROWSER_HELP),
         _ => None,
     };
     let now_playing = match panel_help {
@@ -954,7 +995,7 @@ mod tests {
     }
 
     /// The household, with a queue of three tracks read for the bedroom.
-    fn household_with_queue() -> HouseholdState {
+    pub(super) fn household_with_queue() -> HouseholdState {
         use sinuous_client::queue::{Queue, QueueEntry};
 
         let entry = |position, name: &str| QueueEntry {
@@ -1013,6 +1054,7 @@ mod tests {
                 .any(|row| row.contains("Not playing from the queue"))
         );
         assert!(rows.iter().any(|row| row.contains("Nothing playing")));
+        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
     }
 
     #[test]
@@ -1033,6 +1075,8 @@ mod tests {
         );
         assert!(!rows.iter().any(|row| row.contains("⏵ Contemplation")));
         assert!(rows.iter().any(|row| row.contains("▌ Escape")));
+        // Its tracks can't be skipped to.
+        assert!(rows.iter().any(|row| row.contains(BROWSER_VIEW_HELP)));
 
         // The queue of another group is not shown.
         press(
@@ -1053,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_tabs_show_the_history_and_the_favorites() {
+    fn browser_tabs_show_the_history_the_favorites_and_the_playlists() {
         let mut state = household();
         state.history = vec![
             serde_json::from_value(serde_json::json!({
@@ -1061,6 +1105,16 @@ mod tests {
                 "type": "album",
                 "id": {"_objectType": "universalMusicObjectId", "objectId": "spotify:album:1"},
                 "name": "Summit",
+            }))
+            .unwrap(),
+        ]
+        .into();
+        state.playlists = vec![
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "playlistSummary",
+                "id": "3",
+                "name": "Road trip",
+                "trackCount": 12,
             }))
             .unwrap(),
         ]
@@ -1073,7 +1127,7 @@ mod tests {
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(
             rows.iter()
-                .any(|row| row.contains("Queue · History · Favorites"))
+                .any(|row| row.contains(" Queue · History · Favorites · Playlists "))
         );
         assert!(rows.iter().any(|row| row.contains("▌ Summit")));
         assert!(rows.iter().any(|row| row.contains("Album")));
@@ -1081,7 +1135,12 @@ mod tests {
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("No favorites")));
-        assert!(rows.iter().any(|row| row.contains(FAVORITES_HELP)));
+        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
+
+        press(&[KeyCode::Tab], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("▌ Road trip")));
+        assert!(rows.iter().any(|row| row.contains("Playlist · 12 tracks")));
     }
 
     #[test]

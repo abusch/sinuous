@@ -187,6 +187,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
                 ("l", "Queue of the group"),
                 ("h", "Recently played"),
                 ("f", "Play a favorite"),
+                ("P", "Play a playlist"),
                 ("g", "Switch to another group"),
                 ("G", "Add or remove speakers from the group"),
                 ("i", "System info, for troubleshooting"),

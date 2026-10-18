@@ -14,16 +14,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use sinuous_client::{
-    Event, EventPayload, FavoriteId, GroupId, Household, HouseholdId, PlayerId, Subscription,
-    Topology,
+    Event, EventPayload, FavoriteId, GroupId, Household, HouseholdId, PlayerId, PlaylistId,
+    Subscription, Topology,
     favorites::Favorite,
     hardware_status::{BatteryStatus, WirelessNetworkStatus},
-    history::HistoryItem,
+    history::{ContentType, HistoryItem},
     playback::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
         PlaybackStatus,
     },
-    playback_metadata::{ImageUrl, MetadataStatus, QueueItem, Tag, Track},
+    playback_metadata::{ImageUrl, MetadataStatus, QueueItem, Tag, Track, UniversalMusicObjectId},
+    playlists::PlaylistSummary,
     queue::Queue,
 };
 use tokio::{
@@ -42,7 +43,11 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Commands sent while this many are still waiting to run are dropped.
 const COMMAND_QUEUE_SIZE: usize = 16;
 /// The lists of the household the service keeps up to date.
-const HOUSEHOLD_SUBSCRIPTIONS: [Subscription; 2] = [Subscription::Favorites, Subscription::History];
+const HOUSEHOLD_SUBSCRIPTIONS: [Subscription; 3] = [
+    Subscription::Favorites,
+    Subscription::Playlists,
+    Subscription::History,
+];
 
 /// The speakers to connect to, as given on the command line or in the configuration file.
 #[derive(Debug, Default)]
@@ -77,6 +82,8 @@ pub struct HouseholdState {
     /// Sorted by name.
     pub players: Vec<PlayerInfo>,
     pub favorites: Arc<[Favorite]>,
+    /// The Sonos playlists saved in the household.
+    pub playlists: Arc<[PlaylistSummary]>,
     /// What was played recently, most recent first.
     pub history: Arc<[HistoryItem]>,
     /// The queue of the group the UI watches (see [`SonosHandle::watch_queue`]), or of the last
@@ -361,6 +368,11 @@ pub enum GroupAction {
     Previous,
     AdjustVolume(i8),
     LoadFavorite(FavoriteId),
+    LoadPlaylist(PlaylistId),
+    /// Play content from a music service, e.g. something in the history.
+    LoadContent(UniversalMusicObjectId, ContentType),
+    /// Play the track at this position in the queue, from 1.
+    SkipToTrack(u32),
     /// Make these players the members of the group. The coordinator must come first.
     SetMembers(Vec<PlayerId>),
     SetPlayModes(PlayModesUpdate),
@@ -487,6 +499,8 @@ struct Service {
     household_subscribed: HashSet<Subscription>,
     /// The version of the favorites in the state.
     favorites_version: Option<String>,
+    /// The version of the playlists in the state.
+    playlists_version: Option<String>,
     /// The version of the history in the state.
     history_version: Option<String>,
     /// The group whose queue to keep up to date, if any.
@@ -512,6 +526,7 @@ impl Service {
             failing: HashSet::new(),
             household_subscribed: HashSet::new(),
             favorites_version: None,
+            playlists_version: None,
             history_version: None,
             watched_queue_rx,
             queue_reads: JoinSet::new(),
@@ -519,7 +534,7 @@ impl Service {
     }
 
     async fn run(mut self) {
-        // The favorites and the history get loaded when the initial events arrive.
+        // The favorites, the playlists and the history get loaded when the initial events arrive.
         self.subscribe_to_household().await;
 
         let mut retry = time::interval_at(time::Instant::now() + RETRY_INTERVAL, RETRY_INTERVAL);
@@ -565,6 +580,9 @@ impl Service {
         match event.payload {
             EventPayload::VersionChanged(changed) if event.namespace == "favorites" => {
                 self.load_favorites(changed.version).await;
+            }
+            EventPayload::VersionChanged(changed) if event.namespace == "playlists" => {
+                self.load_playlists(changed.version).await;
             }
             EventPayload::VersionChanged(changed) if event.namespace == "history" => {
                 self.load_history(changed.version).await;
@@ -745,6 +763,27 @@ impl Service {
         }
     }
 
+    async fn load_playlists(&mut self, version: String) {
+        if self.playlists_version.as_ref() == Some(&version) {
+            return;
+        }
+        debug!("Fetching playlists...");
+        let playlists = match self.household.connection().await {
+            Ok(conn) => conn.get_playlists().await,
+            Err(err) => Err(err),
+        };
+        match playlists {
+            Ok(playlists) => {
+                info!("Found {} playlists", playlists.playlists.len());
+                self.playlists_version = Some(version);
+                self.state_tx.send_modify(|state| {
+                    state.playlists = playlists.playlists.into();
+                });
+            }
+            Err(err) => self.report_error(format!("Failed to fetch playlists: {err}")),
+        }
+    }
+
     async fn load_history(&mut self, version: String) {
         if self.history_version.as_ref() == Some(&version) {
             return;
@@ -858,6 +897,7 @@ impl Service {
                 Err(err) => {
                     let list = match subscription {
                         Subscription::History => "the history",
+                        Subscription::Playlists => "playlists",
                         _ => "favorites",
                     };
                     self.subscription_failed(
@@ -994,15 +1034,26 @@ async fn run_group_command(
             .await
             .context("Failed to change the volume")?,
         GroupAction::LoadFavorite(favorite) => {
-            let options = LoadOptions {
-                action: Some(LoadAction::Replace),
-                play_on_completion: Some(true),
-                ..Default::default()
-            };
             group
-                .load_favorite(favorite, &options)
+                .load_favorite(favorite, &play_now())
                 .await
                 .context("Failed to play favorite")?;
+        }
+        GroupAction::LoadPlaylist(playlist) => group
+            .load_playlist(playlist, &play_now())
+            .await
+            .context("Failed to play the playlist")?,
+        GroupAction::LoadContent(id, content_type) => group
+            .load_content(id, *content_type, &play_now())
+            .await
+            .context("Failed to play it again")?,
+        GroupAction::SkipToTrack(position) => {
+            group
+                .skip_to_track(*position)
+                .await
+                .context("Failed to skip to the track")?;
+            // Skipping doesn't start playback.
+            group.play().await.context("Failed to play")?;
         }
         GroupAction::SetMembers(players) => {
             group
@@ -1024,6 +1075,15 @@ async fn run_group_command(
             .context("Failed to cancel the sleep timer")?,
     }
     Ok(())
+}
+
+/// Options to replace the queue of a group with what is loaded, and play it.
+fn play_now() -> LoadOptions {
+    LoadOptions {
+        action: Some(LoadAction::Replace),
+        play_on_completion: Some(true),
+        ..Default::default()
+    }
 }
 
 /// Connect to the household of one of the provided speakers, or of the first speaker discovered

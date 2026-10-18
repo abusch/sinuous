@@ -424,7 +424,7 @@ fn handle_sleep_timer_picker_input(
 }
 
 /// Update `ui` according to the key pressed while the browser is open, and return the command
-/// playing the highlighted favorite, if any.
+/// playing the highlighted item, if any.
 fn handle_browser_input(
     input: &KeyEvent,
     state: &HouseholdState,
@@ -447,12 +447,12 @@ fn handle_browser_input(
         KeyCode::Char(key) if let Some(tab) = Tab::ALL.into_iter().find(|t| t.key() == key) => {
             *browser = Browser::new(tab);
         }
-        KeyCode::Enter if browser.tab == Tab::Favorites => {
-            let favorite = state.favorites.get(browser.highlight.item)?;
+        KeyCode::Enter => {
+            let action = browser.tab.play(browser.highlight.item, state, group)?;
             ui.mode = Mode::NowPlaying;
             return Some(Command::Group {
                 group: group.id.clone(),
-                action: GroupAction::LoadFavorite(favorite.id.clone()),
+                action,
             });
         }
         KeyCode::Esc => ui.mode = Mode::NowPlaying,
@@ -554,11 +554,11 @@ fn next_repeat(modes: PlayModes, actions: PlaybackActions) -> PlayModesUpdate {
 
 #[cfg(test)]
 mod tests {
-    use sinuous_client::GroupId;
+    use sinuous_client::{GroupId, history::ContentType};
 
     use super::*;
     use crate::sonos::Playback;
-    use crate::view::tests::{household, press};
+    use crate::view::tests::{household, household_with_queue, press};
 
     #[test]
     fn group_editor_sets_members_with_coordinator_first() {
@@ -728,7 +728,7 @@ mod tests {
         let mut ui = UiState::default();
         ui.sync(&state);
 
-        for opening in [',', 'v', '.', 'f', 'h', 'l', 'g', 'G', 'i', '?'] {
+        for opening in [',', 'v', '.', 'f', 'h', 'l', 'P', 'g', 'G', 'i', '?'] {
             assert!(press(&[KeyCode::Char(opening)], &state, &mut ui).is_none());
             assert!(!matches!(ui.mode, Mode::NowPlaying), "{opening}");
             assert!(press(&[KeyCode::Char('q')], &state, &mut ui).is_none());
@@ -870,8 +870,10 @@ mod tests {
         // Nothing to play from the queue
         assert!(press(&[KeyCode::Enter], &state, &mut ui).is_none());
         press(&[KeyCode::BackTab], &state, &mut ui);
+        assert_eq!(tab(&ui), Some(Tab::Playlists));
+        press(&[KeyCode::Left], &state, &mut ui);
         assert_eq!(tab(&ui), Some(Tab::Favorites));
-        press(&[KeyCode::Right], &state, &mut ui);
+        press(&[KeyCode::Right, KeyCode::Right], &state, &mut ui);
         assert_eq!(tab(&ui), Some(Tab::Queue));
         press(&[KeyCode::Char('h')], &state, &mut ui);
         assert_eq!(tab(&ui), Some(Tab::History));
@@ -893,6 +895,91 @@ mod tests {
         };
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(favorite, "evening".into());
+        assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    /// The action of the command sent when pressing `keys`, if any.
+    fn action(keys: &[KeyCode], state: &HouseholdState, ui: &mut UiState) -> Option<GroupAction> {
+        match press(keys, state, ui)? {
+            Request::Speakers(Command::Group { group, action }) => {
+                assert_eq!(group, GroupId::from("bedroom"));
+                Some(action)
+            }
+            request => panic!("Unexpected request: {request:?}"),
+        }
+    }
+
+    #[test]
+    fn browser_skips_to_tracks_of_the_queue_played_from() {
+        let mut state = household_with_queue();
+        state.groups[0].queue_version = Some("4".to_owned());
+        state.groups[0].queue_position = Some(1);
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        ui.sync(&state);
+        let skip = action(&[KeyCode::End, KeyCode::Enter], &state, &mut ui);
+        assert!(
+            matches!(skip, Some(GroupAction::SkipToTrack(3))),
+            "{skip:?}"
+        );
+        assert!(matches!(ui.mode, Mode::NowPlaying));
+
+        // Playing from another version of the queue
+        state.groups[0].queue_version = Some("5".to_owned());
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        ui.sync(&state);
+        assert!(action(&[KeyCode::Enter], &state, &mut ui).is_none());
+        assert!(matches!(ui.mode, Mode::Browser(_)));
+    }
+
+    #[test]
+    fn browser_plays_history_items_and_playlists() {
+        let mut state = household();
+        state.history = [("album", true), ("album", false), ("audiobook", true)]
+            .map(|(kind, playable)| {
+                serde_json::from_value(serde_json::json!({
+                    "_objectType": "contentResource",
+                    "type": kind,
+                    "id": {"_objectType": "universalMusicObjectId", "objectId": "spotify:album:1"},
+                    "name": "Summit",
+                    "playable": playable,
+                }))
+                .unwrap()
+            })
+            .into();
+        state.playlists = vec![
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "playlistSummary",
+                "id": "3",
+                "name": "Road trip",
+            }))
+            .unwrap(),
+        ]
+        .into();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let again = action(&[KeyCode::Char('h'), KeyCode::Enter], &state, &mut ui);
+        let Some(GroupAction::LoadContent(id, ContentType::Album)) = again else {
+            panic!("Unexpected action: {again:?}");
+        };
+        assert_eq!(id.object_id, "spotify:album:1");
+        // Neither what can't be played, nor what isn't known well enough to be played
+        for down in 1..=2 {
+            press(&[KeyCode::Char('h')], &state, &mut ui);
+            let mut keys = vec![KeyCode::Down; down];
+            keys.push(KeyCode::Enter);
+            assert!(action(&keys, &state, &mut ui).is_none(), "{down}");
+            assert!(matches!(ui.mode, Mode::Browser(_)));
+            press(&[KeyCode::Esc], &state, &mut ui);
+        }
+
+        let playlist = action(&[KeyCode::Char('P'), KeyCode::Enter], &state, &mut ui);
+        let Some(GroupAction::LoadPlaylist(id)) = playlist else {
+            panic!("Unexpected action: {playlist:?}");
+        };
+        assert_eq!(id, "3".into());
         assert!(matches!(ui.mode, Mode::NowPlaying));
     }
 

@@ -11,6 +11,7 @@ use ratatui::{
 use sinuous_client::{
     favorites::Favorite,
     history::{ContentType, HistoryItem},
+    playlists::PlaylistSummary,
     queue::QueueEntry,
 };
 
@@ -20,8 +21,8 @@ use crate::theme::Theme;
 
 use super::now_playing::format_duration;
 use super::{
-    BROWSER_HELP, Browser, FAVORITES_HELP, GROUP_EDITOR_HELP, GROUP_PANEL_HELP, GroupEditor,
-    PanelHighlight, Tab,
+    BROWSER_HELP, BROWSER_VIEW_HELP, Browser, GROUP_EDITOR_HELP, GROUP_PANEL_HELP, GroupEditor,
+    PanelHighlight, Tab, can_play_again,
 };
 
 /// How many lines each group takes in the group panel.
@@ -318,7 +319,8 @@ pub(super) fn render_browser(
 
     let (help, note, items) = match browser.tab {
         Tab::Queue => {
-            let (note, items) = match GroupQueue::of(state.queue.as_ref(), &group.id) {
+            let queue = GroupQueue::of(state.queue.as_ref(), &group.id);
+            let (note, items) = match queue {
                 QueueContents::Loading => (Some("Reading the queue…"), Vec::new()),
                 QueueContents::Failed => (Some("Failed to read the queue"), Vec::new()),
                 QueueContents::Loaded(queue) if queue.items.is_empty() => {
@@ -336,7 +338,14 @@ pub(super) fn render_browser(
                     (note, items)
                 }
             };
-            (BROWSER_HELP, note, items)
+            // Its tracks can only be skipped to while the group plays from it.
+            let help = match queue {
+                QueueContents::Loaded(queue) if group.plays_from(queue) => BROWSER_HELP,
+                QueueContents::Loaded(_) | QueueContents::Loading | QueueContents::Failed => {
+                    BROWSER_VIEW_HELP
+                }
+            };
+            (help, note, items)
         }
         Tab::History => {
             let items: Vec<_> = state
@@ -354,7 +363,16 @@ pub(super) fn render_browser(
                 .map(|favorite| favorite_lines(favorite, symbols, theme))
                 .collect();
             let note = items.is_empty().then_some("No favorites");
-            (FAVORITES_HELP, note, items)
+            (BROWSER_HELP, note, items)
+        }
+        Tab::Playlists => {
+            let items: Vec<_> = state
+                .playlists
+                .iter()
+                .map(|playlist| playlist_lines(playlist, symbols, theme))
+                .collect();
+            let note = items.is_empty().then_some("No playlists");
+            (BROWSER_HELP, note, items)
         }
     };
     render_panel(
@@ -412,12 +430,14 @@ fn queue_entry_lines<'a>(
     [Line::from(title_line), Line::from(details)]
 }
 
-/// The lines showing `item` of the history: its name, then what it is.
+/// The lines showing `item` of the history: its name, muted if it can't be played again, then
+/// what it is.
 fn history_lines<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
-    let mut name_line = vec![Span::styled(
-        item.name.as_str(),
-        Style::default().add_modifier(Modifier::BOLD),
-    )];
+    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
+    if !can_play_again(item) {
+        name_style = name_style.fg(theme.muted);
+    }
+    let mut name_line = vec![Span::styled(item.name.as_str(), name_style)];
     if item.explicit {
         name_line.push(Span::raw(" "));
         name_line.push(Span::styled(" E ", theme.badge));
@@ -431,6 +451,33 @@ fn history_lines<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) ->
     [
         Line::from(name_line),
         Line::styled(kind, Style::default().fg(theme.secondary)),
+    ]
+}
+
+/// The lines showing `playlist`: its name, then how many tracks it has.
+fn playlist_lines<'a>(
+    playlist: &'a PlaylistSummary,
+    symbols: &Symbols,
+    theme: &Theme,
+) -> [Line<'a>; 2] {
+    let mut details = vec![Span::styled(
+        symbols.playlist,
+        Style::default().fg(theme.secondary),
+    )];
+    if let Some(count) = playlist.track_count {
+        let tracks = if count == 1 { "track" } else { "tracks" };
+        details.push(Span::styled(" · ", Style::default().fg(theme.muted)));
+        details.push(Span::styled(
+            format!("{count} {tracks}"),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    [
+        Line::styled(
+            playlist.name.as_str(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(details),
     ]
 }
 
