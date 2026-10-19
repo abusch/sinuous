@@ -379,7 +379,7 @@ pub(super) fn render_browser(
             let items: Vec<_> = state
                 .playlists
                 .iter()
-                .map(|playlist| playlist_lines(playlist, symbols, theme))
+                .map(|playlist| playlist_lines(playlist, theme))
                 .collect();
             let note = items.is_empty().then_some("No playlists");
             (BROWSER_HELP, note, items)
@@ -477,29 +477,20 @@ fn kind_spans(kind: Option<&'static str>, symbols: &Symbols, theme: &Theme) -> V
 }
 
 /// The lines showing `playlist`: its name, then how many tracks it has.
-fn playlist_lines<'a>(
-    playlist: &'a PlaylistSummary,
-    symbols: &Symbols,
-    theme: &Theme,
-) -> [Line<'a>; 2] {
-    let mut details = vec![Span::styled(
-        symbols.playlist,
-        Style::default().fg(theme.secondary),
-    )];
-    if let Some(count) = playlist.track_count {
+fn playlist_lines<'a>(playlist: &'a PlaylistSummary, theme: &Theme) -> [Line<'a>; 2] {
+    let tracks = playlist.track_count.map(|count| {
         let tracks = if count == 1 { "track" } else { "tracks" };
-        details.push(Span::styled(" · ", Style::default().fg(theme.muted)));
-        details.push(Span::styled(
+        Line::styled(
             format!("{count} {tracks}"),
             Style::default().fg(theme.muted),
-        ));
-    }
+        )
+    });
     [
         Line::styled(
             playlist.name.as_str(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Line::from(details),
+        tracks.unwrap_or_default(),
     ]
 }
 

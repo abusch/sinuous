@@ -1139,7 +1139,10 @@ mod tests {
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("▌ Road trip")));
-        assert!(rows.iter().any(|row| row.contains("Playlist · 12 tracks")));
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("12 tracks") && !row.contains("Playlist"))
+        );
     }
 
     #[test]
