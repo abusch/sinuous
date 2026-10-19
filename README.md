@@ -31,7 +31,13 @@ network as your computer.
 
 ## Installation
 
-Download the binary for your platform from the
+On macOS and Linux, install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install abusch/tap/sinuous
+```
+
+Or download the binary for your platform from the
 [releases page](https://github.com/abusch/sinuous/releases), or install it with
 [Cargo](https://rustup.rs):
 

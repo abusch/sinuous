@@ -49,6 +49,8 @@ jobs:
     uses: ./.github/workflows/binaries.yml
     with:
       tag: ${{ needs.release-plz-release.outputs.tag }}
+    # For the token of the Homebrew tap.
+    secrets: inherit
 
   # Create a PR with the new versions and changelog, preparing the next release.
   release-plz-pr:
