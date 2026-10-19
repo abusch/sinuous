@@ -1147,12 +1147,15 @@ mod tests {
 
     #[test]
     fn idle_groups_show_as_stopped() {
-        use sinuous_client::playback::{PlayModes, PlaybackActions};
+        use sinuous_client::playback::{PlayModes, PlaybackActions, PlaybackState};
 
         use crate::sonos::Playback;
 
         let mut state = household();
-        state.groups[0].playback = Some(Playback::idle(PlaybackActions::default()));
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Idle,
+            PlaybackActions::default(),
+        ));
         let mut ui = UiState::default();
         ui.sync(&state);
         let rows = screen_rows(&state, &mut ui, 120);
@@ -1171,13 +1174,37 @@ mod tests {
     }
 
     #[test]
+    fn buffering_groups_show_it() {
+        use sinuous_client::playback::{PlaybackActions, PlaybackState};
+
+        use crate::sonos::Playback;
+
+        let mut state = household();
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Buffering,
+            PlaybackActions::default(),
+        ));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("Buffering…")));
+        assert!(!rows.iter().any(|row| row.contains("0:00")));
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏵ Buffering")));
+    }
+
+    #[test]
     fn stations_show_no_elapsed_time() {
-        use sinuous_client::playback::PlaybackActions;
+        use sinuous_client::playback::{PlaybackActions, PlaybackState};
 
         use crate::sonos::{Playback, TrackInfo};
 
         let mut state = household();
-        state.groups[0].playback = Some(Playback::playing(PlaybackActions::default()));
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Playing,
+            PlaybackActions::default(),
+        ));
         state.groups[0].now_playing = Some(TrackInfo {
             title: Some("franceinfo".to_owned()),
             artist: None,

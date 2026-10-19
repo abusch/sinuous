@@ -555,7 +555,7 @@ fn next_repeat(modes: PlayModes, actions: PlaybackActions) -> PlayModesUpdate {
 
 #[cfg(test)]
 mod tests {
-    use sinuous_client::{GroupId, history::ContentType};
+    use sinuous_client::{GroupId, history::ContentType, playback::PlaybackState};
 
     use super::*;
     use crate::sonos::Playback;
@@ -765,7 +765,7 @@ mod tests {
             can_stop: true,
             ..Default::default()
         };
-        state.groups[0].playback = Some(Playback::playing(actions));
+        state.groups[0].playback = Some(Playback::in_state(PlaybackState::Playing, actions));
         assert!(matches!(
             press(&[KeyCode::Char(' ')], &state, &mut ui),
             Some(Request::Speakers(Command::Group {
@@ -774,7 +774,10 @@ mod tests {
             }))
         ));
 
-        state.groups[0].playback = Some(Playback::playing(PlaybackActions::default()));
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Playing,
+            PlaybackActions::default(),
+        ));
         assert!(press(&[KeyCode::Char(' ')], &state, &mut ui).is_none());
     }
 

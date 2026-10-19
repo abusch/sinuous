@@ -157,6 +157,11 @@ fn group_lines<'a>(
 
     let not_playing = Style::default().fg(theme.secondary);
     let (icon, status, status_style) = match group.playback {
+        Some(p) if p.state == PlaybackState::Buffering => (
+            symbols.group_playing,
+            "Buffering",
+            Style::default().fg(theme.on),
+        ),
         Some(p) if p.is_playing => (
             symbols.group_playing,
             "Playing",

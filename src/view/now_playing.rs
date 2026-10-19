@@ -332,6 +332,15 @@ fn render_progress(
     bar_area: Rect,
 ) {
     let playback = group.playback;
+    if playback.is_some_and(|p| p.state == PlaybackState::Buffering) {
+        frame.render_widget(
+            Paragraph::new("Buffering…")
+                .style(Style::default().fg(theme.muted))
+                .centered(),
+            area,
+        );
+        return;
+    }
     // Live radio has no position in what it plays, only the time since it started.
     let is_station = group
         .now_playing

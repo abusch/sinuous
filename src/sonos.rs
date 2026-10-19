@@ -280,21 +280,12 @@ impl Playback {
         }
     }
 
-    /// Idle playback, e.g. of a stopped live radio stream, of a source supporting `actions`.
+    /// Playback in `state`, in the default play modes, of a source supporting `actions`.
     #[cfg(test)]
-    pub fn idle(actions: PlaybackActions) -> Self {
+    pub fn in_state(state: PlaybackState, actions: PlaybackActions) -> Self {
         Self {
             actions,
-            ..Self::from_parts(PlaybackState::Idle, Duration::ZERO, Instant::now())
-        }
-    }
-
-    /// Playback, in the default play modes, of a source supporting `actions`.
-    #[cfg(test)]
-    pub fn playing(actions: PlaybackActions) -> Self {
-        Self {
-            actions,
-            ..Self::from_parts(PlaybackState::Playing, Duration::ZERO, Instant::now())
+            ..Self::from_parts(state, Duration::ZERO, Instant::now())
         }
     }
 }
