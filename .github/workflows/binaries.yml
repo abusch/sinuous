@@ -1,6 +1,6 @@
 name: Release binaries
 
-# Builds the binaries of a release, and attaches them to it.
+# Builds the binaries of a release, attaches them to it, and updates the Homebrew formula.
 on:
   # From release-plz.yml, once it has created a release: GitHub doesn't run workflows for releases
   # made with GITHUB_TOKEN, so this can't be triggered by the release itself.
@@ -87,3 +87,36 @@ jobs:
           zip: windows
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Point the formula of the Homebrew tap to the binaries just attached.
+  homebrew:
+    name: Homebrew formula
+    needs: upload-assets
+    if: github.repository_owner == 'abusch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Checkout tap
+        uses: actions/checkout@v7
+        with:
+          repository: abusch/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Update formula
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p tap/Formula
+          .github/homebrew/formula.sh "$TAG" > tap/Formula/sinuous.rb
+          cd tap
+          git add Formula/sinuous.rb
+          if git diff --cached --quiet; then
+            echo "The formula is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "sinuous ${TAG#v}"
+          git push
