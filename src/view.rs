@@ -1165,6 +1165,29 @@ mod tests {
     }
 
     #[test]
+    fn stations_show_no_elapsed_time() {
+        use sinuous_client::playback::PlaybackActions;
+
+        use crate::sonos::{Playback, TrackInfo};
+
+        let mut state = household();
+        state.groups[0].playback = Some(Playback::playing(PlaybackActions::default()));
+        state.groups[0].now_playing = Some(TrackInfo {
+            title: Some("franceinfo".to_owned()),
+            artist: None,
+            album_explicit: false,
+            duration_secs: None,
+            image_url: None,
+            is_station: true,
+        });
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("franceinfo")));
+        assert!(!rows.iter().any(|row| row.contains("0:00")));
+    }
+
+    #[test]
     fn next_track_is_not_shown_when_it_is_the_one_playing() {
         use crate::sonos::TrackInfo;
 
@@ -1174,6 +1197,7 @@ mod tests {
             album_explicit: false,
             duration_secs: None,
             image_url: None,
+            is_station: false,
         };
         let mut state = household();
         state.groups[0].now_playing = Some(track("Bewitched"));

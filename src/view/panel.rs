@@ -179,6 +179,9 @@ fn group_lines<'a>(
     // The track, lined up with the status after the icon
     let mut track_line = vec![Span::raw(" ".repeat(Span::raw(icon).width() + 1))];
     match &group.now_playing {
+        Some(track) if track.is_station => {
+            track_line.push(Span::raw(track.title.as_deref().unwrap_or("Unknown title")));
+        }
         Some(track) => track_line.extend([
             Span::raw(track.title.as_deref().unwrap_or("Unknown title")),
             Span::styled(" · ", muted),
