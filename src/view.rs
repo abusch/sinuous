@@ -1146,6 +1146,25 @@ mod tests {
     }
 
     #[test]
+    fn streams_that_cannot_be_paused_show_as_stopped() {
+        use sinuous_client::playback::{PlayModes, PlaybackActions};
+
+        use crate::sonos::Playback;
+
+        let mut state = household();
+        let actions = PlaybackActions {
+            can_play: true,
+            can_stop: true,
+            ..Default::default()
+        };
+        state.groups[0].playback = Some(Playback::paused(PlayModes::default(), actions));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏹")));
+    }
+
+    #[test]
     fn next_track_is_not_shown_when_it_is_the_one_playing() {
         use crate::sonos::TrackInfo;
 

@@ -279,6 +279,15 @@ impl Playback {
             ..Self::from_parts(PlaybackState::Paused, Duration::ZERO, Instant::now())
         }
     }
+
+    /// Playback, in the default play modes, of a source supporting `actions`.
+    #[cfg(test)]
+    pub fn playing(actions: PlaybackActions) -> Self {
+        Self {
+            actions,
+            ..Self::from_parts(PlaybackState::Playing, Duration::ZERO, Instant::now())
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -363,6 +372,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum GroupAction {
     Play,
+    /// Pause, or stop what can't be paused, e.g. a live radio stream.
     Pause,
     Next,
     Previous,

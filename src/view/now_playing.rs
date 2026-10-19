@@ -286,10 +286,10 @@ fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
 /// highlighting the playback status and the play modes that are on.
 fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
-    let status = if is_playing {
-        symbols.playing
-    } else {
-        symbols.paused
+    let status = match group.playback {
+        _ if is_playing => symbols.playing,
+        Some(p) if !p.actions.can_pause && p.actions.can_stop => symbols.stopped,
+        _ => symbols.paused,
     };
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     let repeat = if modes.repeat_one {

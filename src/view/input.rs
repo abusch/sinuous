@@ -527,7 +527,8 @@ pub(super) fn supports(group: &GroupState, action: Action) -> bool {
     };
     let actions = playback.actions;
     match action {
-        Action::PlayPause if playback.is_playing => actions.can_pause,
+        // Pausing stops what can't be paused, e.g. live radio streams.
+        Action::PlayPause if playback.is_playing => actions.can_pause || actions.can_stop,
         Action::PlayPause => actions.can_play,
         Action::Next => actions.can_skip,
         Action::Previous => actions.can_skip_back || actions.can_skip_to_previous,
@@ -753,6 +754,28 @@ mod tests {
             press(&[KeyCode::Char('q')], &state, &mut ui),
             Some(Request::Quit)
         ));
+    }
+
+    #[test]
+    fn space_stops_streams_that_cannot_be_paused() {
+        let mut state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let actions = PlaybackActions {
+            can_stop: true,
+            ..Default::default()
+        };
+        state.groups[0].playback = Some(Playback::playing(actions));
+        assert!(matches!(
+            press(&[KeyCode::Char(' ')], &state, &mut ui),
+            Some(Request::Speakers(Command::Group {
+                action: GroupAction::Pause,
+                ..
+            }))
+        ));
+
+        state.groups[0].playback = Some(Playback::playing(PlaybackActions::default()));
+        assert!(press(&[KeyCode::Char(' ')], &state, &mut ui).is_none());
     }
 
     #[test]

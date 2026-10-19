@@ -8,6 +8,8 @@ pub struct Symbols {
     // Playback status
     pub playing: &'static str,
     pub paused: &'static str,
+    /// Stopped playback of what can't be paused, e.g. a live radio stream.
+    pub stopped: &'static str,
     // Volume levels, shown before the volume of the current group
     pub volume_off: &'static str,
     pub volume_low: &'static str,
@@ -61,6 +63,7 @@ impl Symbols {
     const LABELS: Self = Self {
         playing: "⏵",
         paused: "⏸",
+        stopped: "⏹",
         volume_off: "🔇",
         volume_low: "🔈",
         volume_medium: "🔉",
@@ -95,6 +98,7 @@ impl Symbols {
     const NERD_FONT: Self = Self {
         playing: "\u{f040a}",       // nf-md-play
         paused: "\u{f03e4}",        // nf-md-pause
+        stopped: "\u{f04db}",       // nf-md-stop
         volume_off: "\u{f0581}",    // nf-md-volume_off
         volume_low: "\u{f057f}",    // nf-md-volume_low
         volume_medium: "\u{f0580}", // nf-md-volume_medium

@@ -58,7 +58,7 @@ sinuous --device "Living Room"
 
 | Key | Action |
 | --- | --- |
-| <kbd>Space</kbd> | Play / pause |
+| <kbd>Space</kbd> | Play / pause (or stop) |
 | <kbd>p</kbd> / <kbd>n</kbd> | Previous / next track |
 | <kbd>s</kbd> / <kbd>r</kbd> | Toggle shuffle / cycle repeat (all, one, off) |
 | <kbd>[</kbd> / <kbd>]</kbd> | Volume of the group down / up |
