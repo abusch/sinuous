@@ -11,6 +11,7 @@ use ratatui::{
 use sinuous_client::{
     favorites::Favorite,
     history::{ContentType, HistoryItem},
+    playback::PlaybackState,
     playlists::PlaylistSummary,
     queue::QueueEntry,
 };
@@ -154,18 +155,25 @@ fn group_lines<'a>(
         name_style = name_style.fg(theme.name);
     }
 
-    let (icon, status, status_style) = if group.playback.is_some_and(|p| p.is_playing) {
-        (
+    let not_playing = Style::default().fg(theme.secondary);
+    let (icon, status, status_style) = match group.playback {
+        Some(p) if p.state == PlaybackState::Buffering => (
+            symbols.group_playing,
+            "Buffering",
+            Style::default().fg(theme.on),
+        ),
+        Some(p) if p.is_playing => (
             symbols.group_playing,
             "Playing",
             Style::default().fg(theme.on),
-        )
-    } else {
-        (
-            symbols.group_not_playing,
-            "Not playing",
-            Style::default().fg(theme.secondary),
-        )
+        ),
+        Some(p) if p.state == PlaybackState::Idle => {
+            (symbols.group_stopped, "Stopped", not_playing)
+        }
+        Some(p) if p.state == PlaybackState::Paused => {
+            (symbols.group_paused, "Paused", not_playing)
+        }
+        _ => (symbols.group_paused, "Not playing", not_playing),
     };
     let mut status_line = vec![Span::styled(format!("{icon} {status}"), status_style)];
     if let Some(service) = group.source.as_ref().and_then(|s| s.service.as_deref()) {
@@ -179,6 +187,9 @@ fn group_lines<'a>(
     // The track, lined up with the status after the icon
     let mut track_line = vec![Span::raw(" ".repeat(Span::raw(icon).width() + 1))];
     match &group.now_playing {
+        Some(track) if track.is_station => {
+            track_line.push(Span::raw(track.title.as_deref().unwrap_or("Unknown title")));
+        }
         Some(track) => track_line.extend([
             Span::raw(track.title.as_deref().unwrap_or("Unknown title")),
             Span::styled(" · ", muted),

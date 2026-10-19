@@ -279,6 +279,15 @@ impl Playback {
             ..Self::from_parts(PlaybackState::Paused, Duration::ZERO, Instant::now())
         }
     }
+
+    /// Playback in `state`, in the default play modes, of a source supporting `actions`.
+    #[cfg(test)]
+    pub fn in_state(state: PlaybackState, actions: PlaybackActions) -> Self {
+        Self {
+            actions,
+            ..Self::from_parts(state, Duration::ZERO, Instant::now())
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +299,8 @@ pub struct TrackInfo {
     pub duration_secs: Option<u32>,
     /// The album art, or another picture of what is playing.
     pub image_url: Option<Url>,
+    /// Whether it is a radio station rather than a track, so it has no artist.
+    pub is_station: bool,
 }
 
 impl TrackInfo {
@@ -313,6 +324,25 @@ impl TrackInfo {
                 .is_some_and(|a| a.tags.contains(&Tag::TagExplicit)),
             duration_secs: track.duration_millis.map(millis_to_secs),
             image_url: images.and_then(|images| images.resolve(track)),
+            is_station: false,
+        })
+    }
+
+    /// What the radio station of `metadata` plays, for streams with no current track, or once
+    /// they are stopped: what the stream says it plays, if anything, or the name of the station.
+    fn station(metadata: &MetadataStatus, images: &Images) -> Option<Self> {
+        let container = metadata.container.as_ref()?;
+        if !matches!(container.r#type.as_deref(), Some("station" | "program")) {
+            return None;
+        }
+        let title = metadata.stream_info.as_ref().or(container.name.as_ref())?;
+        Some(Self {
+            title: Some(title.clone()),
+            artist: None,
+            album_explicit: false,
+            duration_secs: None,
+            image_url: images.fallback.and_then(|image| images.url(image)),
+            is_station: true,
         })
     }
 }
@@ -363,6 +393,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum GroupAction {
     Play,
+    /// Pause, or stop what can't be paused, e.g. a live radio stream.
     Pause,
     Next,
     Previous,
@@ -650,7 +681,8 @@ impl Service {
                             group.now_playing = metadata
                                 .current_item
                                 .as_ref()
-                                .and_then(|item| TrackInfo::new(item, Some(&images)));
+                                .and_then(|item| TrackInfo::new(item, Some(&images)))
+                                .or_else(|| TrackInfo::station(&metadata, &images));
                             // Only the image of the current track is shown.
                             group.next_track = metadata
                                 .next_item
@@ -1246,6 +1278,10 @@ impl Images<'_> {
             .as_ref()
             .or_else(|| track.album.as_ref()?.image_url.as_ref())
             .or(self.fallback)?;
+        self.url(image)
+    }
+
+    fn url(&self, image: &ImageUrl) -> Option<Url> {
         match self.coordinator_url {
             Some(coordinator_url) => image.resolve(coordinator_url),
             None => Url::parse(image.as_str()).ok(),
@@ -1373,5 +1409,52 @@ mod tests {
         assert_eq!(groups[0].volume, Some(20));
         assert_eq!(groups[1].name, "Bedroom");
         assert_eq!(groups[1].volume, None);
+    }
+
+    #[test]
+    fn stations_that_do_not_say_what_they_play_are_shown_instead() {
+        // As Radio France reports it for a live stream, playing or stopped.
+        let metadata: MetadataStatus = serde_json::from_value(serde_json::json!({
+            "_objectType": "metadataStatus",
+            "container": {
+                "_objectType": "container",
+                "name": "franceinfo",
+                "type": "station",
+                "service": {"_objectType": "service", "name": "Radio France", "id": "585"},
+                "imageUrl": "https://www.radiofrance.fr/franceinfo.jpg",
+            },
+            "streamInfo": "franceinfo-hifi.aac",
+        }))
+        .unwrap();
+        let images = Images {
+            coordinator_url: None,
+            fallback: metadata.container.as_ref().unwrap().image_url.as_ref(),
+        };
+        let station = TrackInfo::station(&metadata, &images).unwrap();
+        assert_eq!(station.title.as_deref(), Some("franceinfo-hifi.aac"));
+        assert_eq!(station.artist, None);
+        assert!(station.is_station);
+        assert_eq!(
+            station.image_url.map(String::from).as_deref(),
+            Some("https://www.radiofrance.fr/franceinfo.jpg")
+        );
+
+        let without_stream_info = MetadataStatus {
+            stream_info: None,
+            ..metadata.clone()
+        };
+        let station = TrackInfo::station(&without_stream_info, &images).unwrap();
+        assert_eq!(station.title.as_deref(), Some("franceinfo"));
+
+        let playlist = MetadataStatus {
+            container: metadata.container.clone().map(|container| {
+                sinuous_client::playback_metadata::Container {
+                    r#type: Some("playlist".to_owned()),
+                    ..container
+                }
+            }),
+            ..metadata
+        };
+        assert!(TrackInfo::station(&playlist, &images).is_none());
     }
 }

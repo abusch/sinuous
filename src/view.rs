@@ -1146,6 +1146,81 @@ mod tests {
     }
 
     #[test]
+    fn idle_groups_show_as_stopped() {
+        use sinuous_client::playback::{PlayModes, PlaybackActions, PlaybackState};
+
+        use crate::sonos::Playback;
+
+        let mut state = household();
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Idle,
+            PlaybackActions::default(),
+        ));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏹")));
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏹ Stopped")));
+
+        state.groups[0].playback = Some(Playback::paused(
+            PlayModes::default(),
+            PlaybackActions::default(),
+        ));
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏸ Paused")));
+        assert!(!rows.iter().any(|row| row.contains("⏹")));
+    }
+
+    #[test]
+    fn buffering_groups_show_it() {
+        use sinuous_client::playback::{PlaybackActions, PlaybackState};
+
+        use crate::sonos::Playback;
+
+        let mut state = household();
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Buffering,
+            PlaybackActions::default(),
+        ));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("Buffering…")));
+        assert!(!rows.iter().any(|row| row.contains("0:00")));
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏵ Buffering")));
+    }
+
+    #[test]
+    fn stations_show_no_elapsed_time() {
+        use sinuous_client::playback::{PlaybackActions, PlaybackState};
+
+        use crate::sonos::{Playback, TrackInfo};
+
+        let mut state = household();
+        state.groups[0].playback = Some(Playback::in_state(
+            PlaybackState::Playing,
+            PlaybackActions::default(),
+        ));
+        state.groups[0].now_playing = Some(TrackInfo {
+            title: Some("franceinfo".to_owned()),
+            artist: None,
+            album_explicit: false,
+            duration_secs: None,
+            image_url: None,
+            is_station: true,
+        });
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("franceinfo")));
+        assert!(!rows.iter().any(|row| row.contains("0:00")));
+    }
+
+    #[test]
     fn next_track_is_not_shown_when_it_is_the_one_playing() {
         use crate::sonos::TrackInfo;
 
@@ -1155,6 +1230,7 @@ mod tests {
             album_explicit: false,
             duration_secs: None,
             image_url: None,
+            is_station: false,
         };
         let mut state = household();
         state.groups[0].now_playing = Some(track("Bewitched"));

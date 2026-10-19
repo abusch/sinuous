@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Gauge, Paragraph, Widget},
 };
 use ratatui_image::{FilterType, FontSize, Resize, StatefulImage};
+use sinuous_client::playback::PlaybackState;
 
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
@@ -130,6 +131,7 @@ pub(super) fn render_now_playing(
 
     // Track information
     let info = match &group.now_playing {
+        Some(track) if track.is_station => vec![title_line(track, theme)],
         Some(track) => vec![
             title_line(track, theme),
             Line::styled(
@@ -286,10 +288,10 @@ fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
 /// highlighting the playback status and the play modes that are on.
 fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
-    let status = if is_playing {
-        symbols.playing
-    } else {
-        symbols.paused
+    let status = match group.playback {
+        _ if is_playing => symbols.playing,
+        Some(p) if p.state == PlaybackState::Idle => symbols.stopped,
+        _ => symbols.paused,
     };
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();
     let repeat = if modes.repeat_one {
@@ -330,12 +332,26 @@ fn render_progress(
     bar_area: Rect,
 ) {
     let playback = group.playback;
+    if playback.is_some_and(|p| p.state == PlaybackState::Buffering) {
+        frame.render_widget(
+            Paragraph::new("Buffering…")
+                .style(Style::default().fg(theme.muted))
+                .centered(),
+            area,
+        );
+        return;
+    }
+    // Live radio has no position in what it plays, only the time since it started.
+    let is_station = group
+        .now_playing
+        .as_ref()
+        .is_some_and(|track| track.is_station);
     let duration = group
         .now_playing
         .as_ref()
         .map_or(0, |track| track.duration_secs.unwrap_or(0));
     let elapsed = match (&group.now_playing, playback) {
-        (Some(_), Some(p)) => {
+        (Some(_), Some(p)) if !is_station => {
             let elapsed = u32::try_from(p.position(Instant::now()).as_secs()).unwrap_or(u32::MAX);
             // The position is worked out locally, and can run past the end of the track until the
             // speakers report the next one.
@@ -372,10 +388,12 @@ fn render_progress(
         .label("")
         .ratio(ratio);
 
-    frame.render_widget(
-        Paragraph::new(format_duration(elapsed)).right_aligned(),
-        elapsed_area,
-    );
+    if !is_station {
+        frame.render_widget(
+            Paragraph::new(format_duration(elapsed)).right_aligned(),
+            elapsed_area,
+        );
+    }
     frame.render_widget(bar, bar_area);
     frame.render_widget(
         Paragraph::new(remaining_time(elapsed, duration)),
