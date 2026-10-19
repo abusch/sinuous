@@ -347,14 +347,24 @@ pub(super) fn render_browser(
             };
             (help, note, items)
         }
+        // Its items are a line each, unlike the other tabs'.
         Tab::History => {
             let items: Vec<_> = state
                 .history
                 .iter()
-                .map(|item| history_lines(item, symbols, theme))
+                .map(|item| [history_line(item, symbols, theme)])
                 .collect();
             let note = items.is_empty().then_some("Nothing played recently");
-            (BROWSER_HELP, note, items)
+            return render_panel(
+                frame,
+                theme,
+                area,
+                title,
+                BROWSER_HELP,
+                note.map(|note| Line::styled(note, muted)),
+                items,
+                &mut browser.highlight,
+            );
         }
         Tab::Favorites => {
             let items: Vec<_> = state
@@ -430,28 +440,40 @@ fn queue_entry_lines<'a>(
     [Line::from(title_line), Line::from(details)]
 }
 
-/// The lines showing `item` of the history: its name, muted if it can't be played again, then
-/// what it is.
-fn history_lines<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
+/// The line showing `item` of the history: what it is, then its name, muted if it can't be
+/// played again.
+fn history_line<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> Line<'a> {
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if !can_play_again(item) {
         name_style = name_style.fg(theme.muted);
     }
-    let mut name_line = vec![Span::styled(item.name.as_str(), name_style)];
-    if item.explicit {
-        name_line.push(Span::raw(" "));
-        name_line.push(Span::styled(" E ", theme.badge));
-    }
     let kind = match item.r#type {
-        ContentType::Album => symbols.album,
-        ContentType::Playlist => symbols.playlist,
-        ContentType::Program => symbols.radio,
-        ContentType::Other | ContentType::Unknown => "Other",
+        ContentType::Album => Some(symbols.album),
+        ContentType::Playlist => Some(symbols.playlist),
+        ContentType::Program => Some(symbols.radio),
+        ContentType::Other | ContentType::Unknown => None,
     };
-    [
-        Line::from(name_line),
-        Line::styled(kind, Style::default().fg(theme.secondary)),
-    ]
+    let mut line = kind_spans(kind, symbols, theme);
+    line.push(Span::styled(item.name.as_str(), name_style));
+    if item.explicit {
+        line.push(Span::raw(" "));
+        line.push(Span::styled(" E ", theme.badge));
+    }
+    Line::from(line)
+}
+
+/// The spans showing `kind` before the name of something, if it is known.
+fn kind_spans(kind: Option<&'static str>, symbols: &Symbols, theme: &Theme) -> Vec<Span<'static>> {
+    kind.map(|kind| {
+        vec![
+            Span::styled(kind, Style::default().fg(theme.secondary)),
+            Span::styled(
+                symbols.source_kind_separator,
+                Style::default().fg(theme.muted),
+            ),
+        ]
+    })
+    .unwrap_or_default()
 }
 
 /// The lines showing `playlist`: its name, then how many tracks it has.
@@ -481,7 +503,7 @@ fn playlist_lines<'a>(
     ]
 }
 
-/// The lines showing `favorite`: its name, then its music service, what it is, and its
+/// The lines showing `favorite`: what it is and its name, then its music service and its
 /// description.
 fn favorite_lines<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
     let muted = Style::default().fg(theme.muted);
@@ -514,17 +536,16 @@ fn favorite_lines<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) 
             Style::default().fg(theme.secondary),
         ));
     }
-    for text in [kind, description].into_iter().flatten() {
+    if let Some(description) = description {
         if !details.is_empty() {
             details.push(Span::styled(" · ", muted));
         }
-        details.push(Span::styled(text, muted));
+        details.push(Span::styled(description, muted));
     }
-    [
-        Line::styled(
-            favorite.name.as_str(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Line::from(details),
-    ]
+    let mut name_line = kind_spans(kind, symbols, theme);
+    name_line.push(Span::styled(
+        favorite.name.as_str(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    [Line::from(name_line), Line::from(details)]
 }

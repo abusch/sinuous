@@ -1129,8 +1129,7 @@ mod tests {
             rows.iter()
                 .any(|row| row.contains(" Queue · History · Favorites · Playlists "))
         );
-        assert!(rows.iter().any(|row| row.contains("▌ Summit")));
-        assert!(rows.iter().any(|row| row.contains("Album")));
+        assert!(rows.iter().any(|row| row.contains("▌ Album · Summit")));
 
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
