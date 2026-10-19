@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Gauge, Paragraph, Widget},
 };
 use ratatui_image::{FilterType, FontSize, Resize, StatefulImage};
+use sinuous_client::playback::PlaybackState;
 
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
@@ -289,7 +290,7 @@ fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = match group.playback {
         _ if is_playing => symbols.playing,
-        Some(p) if !p.actions.can_pause && p.actions.can_stop => symbols.stopped,
+        Some(p) if p.state == PlaybackState::Idle => symbols.stopped,
         _ => symbols.paused,
     };
     let modes = group.playback.map(|p| p.play_modes).unwrap_or_default();

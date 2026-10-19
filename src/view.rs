@@ -1146,22 +1146,28 @@ mod tests {
     }
 
     #[test]
-    fn streams_that_cannot_be_paused_show_as_stopped() {
+    fn idle_groups_show_as_stopped() {
         use sinuous_client::playback::{PlayModes, PlaybackActions};
 
         use crate::sonos::Playback;
 
         let mut state = household();
-        let actions = PlaybackActions {
-            can_play: true,
-            can_stop: true,
-            ..Default::default()
-        };
-        state.groups[0].playback = Some(Playback::paused(PlayModes::default(), actions));
+        state.groups[0].playback = Some(Playback::idle(PlaybackActions::default()));
         let mut ui = UiState::default();
         ui.sync(&state);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("⏹")));
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏹ Stopped")));
+
+        state.groups[0].playback = Some(Playback::paused(
+            PlayModes::default(),
+            PlaybackActions::default(),
+        ));
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("⏸ Paused")));
+        assert!(!rows.iter().any(|row| row.contains("⏹")));
     }
 
     #[test]

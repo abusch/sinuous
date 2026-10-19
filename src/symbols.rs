@@ -8,7 +8,7 @@ pub struct Symbols {
     // Playback status
     pub playing: &'static str,
     pub paused: &'static str,
-    /// Stopped playback of what can't be paused, e.g. a live radio stream.
+    /// Idle groups, e.g. once a live radio stream is stopped.
     pub stopped: &'static str,
     // Volume levels, shown before the volume of the current group
     pub volume_off: &'static str,
@@ -45,7 +45,8 @@ pub struct Symbols {
 
     // Whether groups are playing, in the group panel
     pub group_playing: &'static str,
-    pub group_not_playing: &'static str,
+    pub group_paused: &'static str,
+    pub group_stopped: &'static str,
 
     /// Where the album art goes when there is none to show.
     pub no_art: &'static str,
@@ -86,7 +87,8 @@ impl Symbols {
         config: "config",
         quit: "quit",
         group_playing: "⏵",
-        group_not_playing: "⏸",
+        group_paused: "⏸",
+        group_stopped: "⏹",
         no_art: "♪",
         checked: "[x]",
         unchecked: "[ ]",
@@ -125,19 +127,20 @@ impl Symbols {
             ("bandcamp", "\u{f2d5}"),    // nf-fa-bandcamp
             ("mixcloud", "\u{f289}"),    // nf-fa-mixcloud
         ],
-        next: "\u{f04ad}",              // nf-md-skip_next
-        previous: "\u{f04ae}",          // nf-md-skip_previous
-        playing_on: "\u{f04c3}",        // nf-md-speaker
-        help: "\u{f02d7}",              // nf-md-help_circle
-        config: "\u{f0493}",            // nf-md-cog
-        quit: "\u{f0206}",              // nf-md-exit_to_app
-        group_playing: "\u{f040c}",     // nf-md-play_circle
-        group_not_playing: "\u{f03e5}", // nf-md-pause_circle
-        no_art: "\u{f075a}",            // nf-md-music
-        checked: "\u{f0132}",           // nf-md-checkbox_marked
-        unchecked: "\u{f0131}",         // nf-md-checkbox_blank_outline
-        theme: "\u{f03d8}",             // nf-md-palette
-        sleep_timer: "\u{f04b2}",       // nf-md-sleep
+        next: "\u{f04ad}",          // nf-md-skip_next
+        previous: "\u{f04ae}",      // nf-md-skip_previous
+        playing_on: "\u{f04c3}",    // nf-md-speaker
+        help: "\u{f02d7}",          // nf-md-help_circle
+        config: "\u{f0493}",        // nf-md-cog
+        quit: "\u{f0206}",          // nf-md-exit_to_app
+        group_playing: "\u{f040c}", // nf-md-play_circle
+        group_paused: "\u{f03e5}",  // nf-md-pause_circle
+        group_stopped: "\u{f0666}", // nf-md-stop_circle
+        no_art: "\u{f075a}",        // nf-md-music
+        checked: "\u{f0132}",       // nf-md-checkbox_marked
+        unchecked: "\u{f0131}",     // nf-md-checkbox_blank_outline
+        theme: "\u{f03d8}",         // nf-md-palette
+        sleep_timer: "\u{f04b2}",   // nf-md-sleep
     };
 
     /// The volume level `volume` is shown as.
