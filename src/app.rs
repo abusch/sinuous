@@ -85,6 +85,7 @@ impl App {
         loop {
             let state = state_rx.borrow_and_update().clone();
             ui.sync(&state);
+            sonos.watch_queue(view::watched_queue(&state, &ui));
             artwork.show(view::artwork_url(&state, &ui).filter(|_| self.ui_config.album_art));
             match ui.previewed_theme() {
                 Some(name) if preview.as_ref().is_some_and(|(shown, _)| *shown == name) => {}

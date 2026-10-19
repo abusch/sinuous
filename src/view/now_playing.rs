@@ -171,8 +171,15 @@ pub(super) fn render_now_playing(
         },
     );
 
-    // Next track
-    if let Some(next) = &group.next_track {
+    // Next track, unless it is the one playing: radio stations report the track playing as the
+    // next one too.
+    let next = group.next_track.as_ref().filter(|next| {
+        group
+            .now_playing
+            .as_ref()
+            .is_none_or(|now| (&now.title, &now.artist) != (&next.title, &next.artist))
+    });
+    if let Some(next) = next {
         let dim = Style::default().fg(theme.muted);
         let next = Line::from(vec![
             Span::styled("Next: ", dim),
@@ -491,7 +498,7 @@ pub(super) fn sleep_timer_text(end: Instant) -> String {
     }
 }
 
-fn format_duration(secs: u32) -> String {
+pub(super) fn format_duration(secs: u32) -> String {
     let minutes = secs / 60;
     let seconds = secs % 60;
 

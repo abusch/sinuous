@@ -18,44 +18,6 @@ use super::now_playing::{sleep_timer_text, volume_slider, volume_text};
 use super::panel::speaker_name;
 use super::{PlaybackItem, SLEEP_TIMER_MINUTES};
 
-/// A popup listing the favorites, with the one at `highlighted` highlighted.
-pub(super) fn render_favorites_picker(
-    state: &HouseholdState,
-    theme: &Theme,
-    highlighted: usize,
-    frame: &mut Frame,
-) {
-    let lines: Vec<_> = state
-        .favorites
-        .iter()
-        .map(|fav| {
-            let mut spans = vec![Span::raw(fav.name.as_str())];
-            if let Some(description) = &fav.description {
-                spans.push(Span::styled(
-                    format!("  {description}"),
-                    Style::default().fg(theme.muted),
-                ));
-            }
-            Line::from(spans)
-        })
-        .collect();
-    let (lines, highlighted) = if lines.is_empty() {
-        let none = Line::styled("No favorites", Style::default().fg(theme.muted));
-        (vec![none], None)
-    } else {
-        (lines, Some(highlighted))
-    };
-
-    render_popup(
-        frame,
-        theme,
-        " Favorites ",
-        lines,
-        highlighted,
-        " ↑↓ Navigate • ENTER play • ESC close ",
-    );
-}
-
 /// A popup with the volume of `group` and of each of its members, with the row at `highlighted`
 /// highlighted.
 pub(super) fn render_volume_mixer(
@@ -222,7 +184,10 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
             "General",
             &[
                 ("v", "Volume of the group and of each speaker"),
+                ("l", "Queue of the group"),
+                ("h", "Recently played"),
                 ("f", "Play a favorite"),
+                ("P", "Play a playlist"),
                 ("g", "Switch to another group"),
                 ("G", "Add or remove speakers from the group"),
                 ("i", "System info, for troubleshooting"),

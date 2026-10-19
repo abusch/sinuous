@@ -2343,6 +2343,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2737,13 +2746,15 @@ dependencies = [
 
 [[package]]
 name = "sinuous-client"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "632e7b341fdc87921e9f6ae72e90d42d8afbab7b5450b2a25134a3e6c39dd2ce"
+checksum = "d44534eca642473de224e22349dcbb33456d562e45d46b3b4ef34ade08944de9"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
  "iddqd",
+ "reqwest",
+ "roxmltree",
  "rustls",
  "serde",
  "serde_json",

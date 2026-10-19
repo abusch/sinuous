@@ -8,12 +8,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType::Rounded, Paragraph, Wrap},
 };
-use sinuous_client::{GroupId, PlayerId};
+use sinuous_client::{
+    GroupId, PlayerId,
+    history::{ContentType, HistoryItem},
+};
 use url::Url;
 
 use crate::artwork::Artwork;
 use crate::config::{UiConfig, UiSetting};
-use crate::sonos::{Command, ErrorMessage, GroupState, HouseholdState};
+use crate::sonos::{
+    Command, ErrorMessage, GroupAction, GroupQueue, GroupState, HouseholdState, QueueContents,
+};
 use crate::symbols::Symbols;
 use crate::theme::{THEMES, Theme};
 
@@ -25,10 +30,10 @@ mod system_info;
 
 pub use input::handle_input;
 use now_playing::{AlbumArt, now_playing_width, render_now_playing};
-use panel::{render_group_editor, render_group_panel};
+use panel::{render_browser, render_group_editor, render_group_panel};
 use popup::{
-    render_config_dialog, render_favorites_picker, render_help, render_playback_menu,
-    render_sleep_timer_picker, render_theme_picker, render_volume_mixer,
+    render_config_dialog, render_help, render_playback_menu, render_sleep_timer_picker,
+    render_theme_picker, render_volume_mixer,
 };
 use system_info::render_system_info;
 
@@ -40,9 +45,12 @@ const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 const GROUP_PANEL_MIN_WIDTH: u16 = 34;
 const GROUP_PANEL_MAX_WIDTH: u16 = 48;
 
-/// The keys to use in the group panel, and in the group editor.
+/// The keys to use in the group panel, in the group editor, and in the browser (and on the queue
+/// tab while the group doesn't play from its queue, which has nothing to play).
 const GROUP_PANEL_HELP: &str = " ↑↓ • ENTER select • ESC close ";
 const GROUP_EDITOR_HELP: &str = " ↑↓ • SPACE toggle • ENTER apply • ESC cancel ";
+const BROWSER_HELP: &str = " TAB switch • ↑↓ • ENTER play • ESC close ";
+const BROWSER_VIEW_HELP: &str = " TAB switch • ↑↓ • ESC close ";
 
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
@@ -62,8 +70,8 @@ enum Mode {
     GroupPicker(PanelHighlight),
     /// The group editor, in the panel on the left.
     GroupEditor(GroupEditor),
-    /// The favorites picker, with the favorite at this index highlighted.
-    FavoritesPicker(usize),
+    /// The queue, the history, the favorites or the playlists, in the panel on the left.
+    Browser(Browser),
     /// The volume mixer, with this row highlighted: 0 for the selected group, then its members.
     VolumeMixer(usize),
     /// The playback menu, and the sleep timer picker on top of it, if open.
@@ -167,6 +175,114 @@ impl GroupEditor {
     }
 }
 
+/// The lists of things played, or to play, shown in the browser, each in its own tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    /// The queue of the selected group.
+    Queue,
+    /// What was played recently in the household.
+    History,
+    Favorites,
+    /// The Sonos playlists of the household.
+    Playlists,
+}
+
+impl Tab {
+    const ALL: [Self; 4] = [Self::Queue, Self::History, Self::Favorites, Self::Playlists];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Queue => "Queue",
+            Self::History => "History",
+            Self::Favorites => "Favorites",
+            Self::Playlists => "Playlists",
+        }
+    }
+
+    /// The key opening the browser on this tab, switching to it, or closing it from it.
+    fn key(self) -> char {
+        match self {
+            Self::Queue => 'l',
+            Self::History => 'h',
+            Self::Favorites => 'f',
+            Self::Playlists => 'P',
+        }
+    }
+
+    /// The tab `offset` tabs away from this one, wrapping around.
+    fn cycle(self, offset: isize) -> Self {
+        let index = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        let len = Self::ALL.len().cast_signed();
+        Self::ALL[(index.cast_signed() + offset)
+            .rem_euclid(len)
+            .cast_unsigned()]
+    }
+
+    /// How many items it lists for `group`.
+    fn len(self, state: &HouseholdState, group: &GroupState) -> usize {
+        match self {
+            Self::Queue => match GroupQueue::of(state.queue.as_ref(), &group.id) {
+                QueueContents::Loaded(queue) => queue.items.len(),
+                QueueContents::Loading | QueueContents::Failed => 0,
+            },
+            Self::History => state.history.len(),
+            Self::Favorites => state.favorites.len(),
+            Self::Playlists => state.playlists.len(),
+        }
+    }
+
+    /// What playing the item at `index` in `group` does, if it can be played.
+    fn play(self, index: usize, state: &HouseholdState, group: &GroupState) -> Option<GroupAction> {
+        let action = match self {
+            // Skipping to a track only works while the group plays from its queue.
+            Self::Queue => match GroupQueue::of(state.queue.as_ref(), &group.id) {
+                QueueContents::Loaded(queue) if group.plays_from(queue) => {
+                    GroupAction::SkipToTrack(queue.items.get(index)?.position)
+                }
+                QueueContents::Loaded(_) | QueueContents::Loading | QueueContents::Failed => {
+                    return None;
+                }
+            },
+            Self::History => {
+                let item = state
+                    .history
+                    .get(index)
+                    .filter(|item| can_play_again(item))?;
+                GroupAction::LoadContent(item.id.clone(), item.r#type)
+            }
+            Self::Favorites => GroupAction::LoadFavorite(state.favorites.get(index)?.id.clone()),
+            Self::Playlists => GroupAction::LoadPlaylist(state.playlists.get(index)?.id.clone()),
+        };
+        Some(action)
+    }
+}
+
+/// Whether `item` of the history can be played again.
+fn can_play_again(item: &HistoryItem) -> bool {
+    // What the type of the content is needs to be given to play it.
+    item.playable && item.r#type != ContentType::Unknown
+}
+
+/// The queue, the history, the favorites or the playlists, in tabs.
+#[derive(Debug)]
+struct Browser {
+    tab: Tab,
+    highlight: PanelHighlight,
+    /// Whether to highlight the current track once the queue is read.
+    find_current: bool,
+}
+
+impl Browser {
+    /// The browser on `tab`, with its first item highlighted, or the current track for the queue.
+    fn new(tab: Tab) -> Self {
+        Self {
+            tab,
+            highlight: PanelHighlight::new(0),
+            find_current: tab == Tab::Queue,
+        }
+    }
+}
+
 /// How far a fullscreen view is scrolled.
 #[derive(Debug, Clone, Copy, Default)]
 struct Scroll {
@@ -181,15 +297,22 @@ struct Scroll {
 struct PanelHighlight {
     item: usize,
     first: usize,
+    /// How many items were shown last time, to move by pages.
+    shown: usize,
 }
 
 impl PanelHighlight {
     fn new(item: usize) -> Self {
-        Self { item, first: 0 }
+        Self {
+            item,
+            first: 0,
+            shown: 0,
+        }
     }
 
     /// Scroll as little as possible for the highlighted item to be among the `shown` ones.
     fn scroll(&mut self, shown: usize) {
+        self.shown = shown;
         self.first = self
             .first
             .min(self.item)
@@ -215,9 +338,8 @@ impl UiState {
             .or_else(|| state.groups.first());
         self.selected_group = selected.map(Selection::of);
 
-        let mixer_rows = self
-            .current_group(state)
-            .map(|(_, group)| state.members(group).count() + 1);
+        let current = self.current_group(state).map(|(_, group)| group);
+        let mixer_rows = current.map(|group| state.members(group).count() + 1);
         match &mut self.mode {
             Mode::GroupPicker(_) if state.groups.is_empty() => self.mode = Mode::NowPlaying,
             Mode::GroupPicker(highlight) => clamp(&mut highlight.item, state.groups.len()),
@@ -225,7 +347,29 @@ impl UiState {
                 self.mode = Mode::NowPlaying;
             }
             Mode::GroupEditor(editor) => clamp(&mut editor.highlight.item, state.players.len()),
-            Mode::FavoritesPicker(highlighted) => clamp(highlighted, state.favorites.len()),
+            Mode::Browser(browser) => {
+                let Some(group) = current else {
+                    self.mode = Mode::NowPlaying;
+                    return;
+                };
+                if browser.find_current
+                    && let QueueContents::Loaded(queue) =
+                        GroupQueue::of(state.queue.as_ref(), &group.id)
+                {
+                    browser.find_current = false;
+                    let current = group
+                        .queue_position
+                        .filter(|_| group.plays_from(queue))
+                        .and_then(|position| {
+                            queue
+                                .items
+                                .iter()
+                                .position(|item| item.position == position)
+                        });
+                    browser.highlight = PanelHighlight::new(current.unwrap_or(0));
+                }
+                clamp(&mut browser.highlight.item, browser.tab.len(state, group));
+            }
             Mode::PlaybackMenu { highlighted, .. } => clamp(highlighted, PlaybackItem::ALL.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
                 Some(rows) => clamp(highlighted, rows),
@@ -235,12 +379,16 @@ impl UiState {
         }
     }
 
-    /// Whether a popup is open in the middle of the screen. The group panel and the group editor
-    /// are beside what is playing, not on top of it, and the system info takes its place.
+    /// Whether a popup is open in the middle of the screen. The panels on the left are beside
+    /// what is playing, not on top of it, and the system info takes its place.
     fn popup_open(&self) -> bool {
         !matches!(
             self.mode,
-            Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) | Mode::SystemInfo(_)
+            Mode::NowPlaying
+                | Mode::GroupPicker(_)
+                | Mode::GroupEditor(_)
+                | Mode::Browser(_)
+                | Mode::SystemInfo(_)
         )
     }
 
@@ -288,6 +436,16 @@ pub fn artwork_url<'a>(state: &'a HouseholdState, ui: &UiState) -> Option<&'a Ur
     group.now_playing.as_ref()?.image_url.as_ref()
 }
 
+/// The group whose queue is shown, if any.
+pub fn watched_queue(state: &HouseholdState, ui: &UiState) -> Option<GroupId> {
+    match &ui.mode {
+        Mode::Browser(browser) if browser.tab == Tab::Queue => {
+            Some(ui.current_group(state)?.1.id.clone())
+        }
+        _ => None,
+    }
+}
+
 /// Whether what is displayed changes over time, and so needs redrawing even when the state doesn't
 /// change.
 pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
@@ -320,9 +478,11 @@ pub fn render_ui(
     if let Mode::SystemInfo(scroll) = &mut ui.mode {
         return render_system_info(state, theme, scroll, frame, body);
     }
+    // The panel is as wide on every tab of the browser.
     let panel_help = match ui.mode {
         Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
         Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
+        Mode::Browser(_) => Some(BROWSER_HELP),
         _ => None,
     };
     let now_playing = match panel_help {
@@ -344,6 +504,9 @@ pub fn render_ui(
                 Mode::GroupEditor(editor) => {
                     render_group_editor(state, symbols, theme, editor, frame, panel);
                 }
+                Mode::Browser(browser) => {
+                    render_browser(state, group, symbols, theme, browser, frame, panel);
+                }
                 _ => {}
             }
             fits.then_some(rest)
@@ -362,9 +525,6 @@ pub fn render_ui(
 
     // Popups, on top of everything else
     match ui.mode {
-        Mode::FavoritesPicker(highlighted) => {
-            render_favorites_picker(state, theme, highlighted, frame);
-        }
         Mode::VolumeMixer(highlighted) => {
             render_volume_mixer(state, group, theme, highlighted, frame);
         }
@@ -387,7 +547,11 @@ pub fn render_ui(
                 render_theme_picker(&settings.theme, theme, highlighted, frame);
             }
         }
-        Mode::NowPlaying | Mode::GroupPicker(_) | Mode::GroupEditor(_) | Mode::SystemInfo(_) => {}
+        Mode::NowPlaying
+        | Mode::GroupPicker(_)
+        | Mode::GroupEditor(_)
+        | Mode::Browser(_)
+        | Mode::SystemInfo(_) => {}
     }
 }
 
@@ -800,6 +964,214 @@ mod tests {
         // There is no room for it beside the controls.
         let narrow = controls_row(&with, 44);
         assert!(!narrow.contains("🌙"), "{narrow}");
+    }
+
+    /// Draw the UI, and return its rows.
+    fn screen_rows(state: &HouseholdState, ui: &mut UiState, width: u16) -> Vec<String> {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
+        terminal
+            .draw(|f| {
+                render_ui(
+                    f,
+                    state,
+                    ui,
+                    &mut artwork,
+                    &UiConfig::default(),
+                    &Theme::TERMINAL,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The household, with a queue of three tracks read for the bedroom.
+    pub(super) fn household_with_queue() -> HouseholdState {
+        use sinuous_client::queue::{Queue, QueueEntry};
+
+        let entry = |position, name: &str| QueueEntry {
+            position,
+            name: Some(name.to_owned()),
+            artist: Some("Boucle Infinie".to_owned()),
+            album: Some("Summit".to_owned()),
+            image_url: None,
+            duration_millis: Some(324_000),
+            uri: None,
+        };
+        let mut state = household();
+        state.queue = Some(GroupQueue {
+            group: "bedroom".into(),
+            contents: QueueContents::Loaded(std::sync::Arc::new(Queue {
+                items: vec![
+                    entry(1, "Escape"),
+                    entry(2, "Contemplation"),
+                    entry(3, "Ascension"),
+                ],
+                total: 3,
+                version: "4".to_owned(),
+            })),
+        });
+        state
+    }
+
+    #[test]
+    fn queue_opens_on_the_current_track() {
+        let mut state = household_with_queue();
+        state.groups[0].queue_version = Some("4".to_owned());
+        state.groups[0].queue_position = Some(2);
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        assert_eq!(watched_queue(&state, &ui), Some("bedroom".into()));
+        ui.sync(&state);
+
+        let Mode::Browser(browser) = &ui.mode else {
+            panic!("{:?}", ui.mode);
+        };
+        assert_eq!(browser.highlight.item, 1);
+        let rows = screen_rows(&state, &mut ui, 120);
+        let current = rows
+            .iter()
+            .find(|row| row.contains("Contemplation"))
+            .unwrap();
+        assert!(current.contains("▌ ⏵ Contemplation"), "{current}");
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Boucle Infinie · Summit · 5:24"))
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.contains("Not playing from the queue"))
+        );
+        assert!(rows.iter().any(|row| row.contains("Nothing playing")));
+        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
+    }
+
+    #[test]
+    fn queue_says_when_it_is_not_what_is_playing() {
+        let mut state = household_with_queue();
+        // Playing from another version of the queue
+        state.groups[0].queue_version = Some("5".to_owned());
+        state.groups[0].queue_position = Some(2);
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        ui.sync(&state);
+
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Not playing from the queue"))
+        );
+        assert!(!rows.iter().any(|row| row.contains("⏵ Contemplation")));
+        assert!(rows.iter().any(|row| row.contains("▌ Escape")));
+        // Its tracks can't be skipped to.
+        assert!(rows.iter().any(|row| row.contains(BROWSER_VIEW_HELP)));
+
+        // The queue of another group is not shown.
+        press(
+            &[
+                KeyCode::Esc,
+                KeyCode::Char('g'),
+                KeyCode::Char('j'),
+                KeyCode::Enter,
+            ],
+            &state,
+            &mut ui,
+        );
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        assert_eq!(watched_queue(&state, &ui), Some("kitchen".into()));
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("Reading the queue")));
+        assert!(!rows.iter().any(|row| row.contains("Escape")));
+    }
+
+    #[test]
+    fn browser_tabs_show_the_history_the_favorites_and_the_playlists() {
+        let mut state = household();
+        state.history = vec![
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "contentResource",
+                "type": "album",
+                "id": {"_objectType": "universalMusicObjectId", "objectId": "spotify:album:1"},
+                "name": "Summit",
+            }))
+            .unwrap(),
+        ]
+        .into();
+        state.playlists = vec![
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "playlistSummary",
+                "id": "3",
+                "name": "Road trip",
+                "trackCount": 12,
+            }))
+            .unwrap(),
+        ]
+        .into();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        press(&[KeyCode::Char('h')], &state, &mut ui);
+        assert_eq!(watched_queue(&state, &ui), None);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(" Queue · History · Favorites · Playlists "))
+        );
+        assert!(rows.iter().any(|row| row.contains("▌ Album · Summit")));
+
+        press(&[KeyCode::Tab], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("No favorites")));
+        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
+
+        press(&[KeyCode::Tab], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("▌ Road trip")));
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("12 tracks") && !row.contains("Playlist"))
+        );
+    }
+
+    #[test]
+    fn next_track_is_not_shown_when_it_is_the_one_playing() {
+        use crate::sonos::TrackInfo;
+
+        let track = |title: &str| TrackInfo {
+            title: Some(title.to_owned()),
+            artist: Some("Candlemass".to_owned()),
+            album_explicit: false,
+            duration_secs: None,
+            image_url: None,
+        };
+        let mut state = household();
+        state.groups[0].now_playing = Some(track("Bewitched"));
+        state.groups[0].next_track = Some(track("Solitude"));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("Next: Solitude by Candlemass"))
+        );
+
+        // As radio stations report it
+        state.groups[0].next_track = Some(track("Bewitched"));
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("Bewitched")));
+        assert!(!rows.iter().any(|row| row.contains("Next:")));
     }
 
     #[test]
