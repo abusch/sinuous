@@ -80,13 +80,13 @@ jobs:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           TAG: ${{ inputs.tag }}
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
+          # Not in ~/.ssh: in a container job HOME is /github/home, but ssh looks in /root/.ssh.
+          ssh_dir=$(mktemp -d)
+          echo "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/aur"
+          chmod 600 "$ssh_dir/aur"
           # From https://aur.archlinux.org.
-          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
 
           git clone ssh://aur@aur.archlinux.org/sinuous.git aur
           cp /tmp/pkg/PKGBUILD /tmp/pkg/.SRCINFO aur/
