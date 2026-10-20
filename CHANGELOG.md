@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1](https://github.com/abusch/sinuous/compare/v0.3.0...v0.3.1) - 2026-10-20
+
+### Other
+
+- Publish releases to the AUR
+- Publish releases to the Homebrew tap
+
 ## [0.3.0](https://github.com/abusch/sinuous/compare/v0.2.0...v0.3.0) - 2026-10-19
 
 ### Added
