@@ -1,0 +1,102 @@
+name: AUR package
+
+# Updates the `sinuous` AUR package to a release.
+on:
+  # From release-plz.yml, once it has created a release: GitHub doesn't run workflows for releases
+  # made with GITHUB_TOKEN, so this can't be triggered by the release itself.
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  # To update the package to an existing release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag of the release, e.g. v0.2.0
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Check that the package builds before publishing it. This runs the build scripts of all the
+  # dependencies, so it's kept apart from the job that has the AUR key.
+  build:
+    name: Build
+    if: github.repository_owner == 'abusch'
+    runs-on: ubuntu-latest
+    # makepkg needs Arch Linux.
+    container: archlinux:base-devel
+    timeout-minutes: 60
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git rust
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Write the PKGBUILD
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # makepkg refuses to run as root.
+          useradd --create-home builder
+          mkdir /tmp/pkg
+          .github/aur/pkgbuild.sh "$TAG" > /tmp/pkg/PKGBUILD
+          chown -R builder /tmp/pkg
+      - name: Build the package
+        working-directory: /tmp/pkg
+        run: runuser -u builder -- makepkg --noconfirm
+
+  # Publish the package. This writes its own PKGBUILD rather than taking the one from the build job,
+  # and runs no code from the dependencies.
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git openssh
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Write the PKGBUILD and .SRCINFO
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # makepkg refuses to run as root.
+          useradd --create-home builder
+          mkdir /tmp/pkg
+          .github/aur/pkgbuild.sh "$TAG" > /tmp/pkg/PKGBUILD
+          chown -R builder /tmp/pkg
+          cd /tmp/pkg
+          runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
+      - name: Publish the package
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # From https://aur.archlinux.org.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+
+          git clone ssh://aur@aur.archlinux.org/sinuous.git aur
+          cp /tmp/pkg/PKGBUILD /tmp/pkg/.SRCINFO aur/
+          cd aur
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "The package is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update to ${TAG#v}"
+          git push

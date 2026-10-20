@@ -37,6 +37,13 @@ On macOS and Linux, install it with [Homebrew](https://brew.sh):
 brew install abusch/tap/sinuous
 ```
 
+On Arch Linux, install the [`sinuous` AUR package](https://aur.archlinux.org/packages/sinuous)
+with your AUR helper, e.g.:
+
+```sh
+paru -S sinuous
+```
+
 Or download the binary for your platform from the
 [releases page](https://github.com/abusch/sinuous/releases), or install it with
 [Cargo](https://rustup.rs):

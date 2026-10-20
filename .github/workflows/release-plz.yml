@@ -52,6 +52,17 @@ jobs:
     # For the token of the Homebrew tap.
     secrets: inherit
 
+  # Update the AUR package to the release just made.
+  release-aur:
+    name: AUR package
+    needs: release-plz-release
+    if: needs.release-plz-release.outputs.tag != ''
+    uses: ./.github/workflows/aur.yml
+    with:
+      tag: ${{ needs.release-plz-release.outputs.tag }}
+    # For the SSH key of the AUR account.
+    secrets: inherit
+
   # Create a PR with the new versions and changelog, preparing the next release.
   release-plz-pr:
     name: Release-plz PR
