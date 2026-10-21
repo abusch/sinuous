@@ -5,7 +5,7 @@ use std::time::Instant;
 use ratatui::{
     Frame,
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph, Widget},
@@ -29,6 +29,17 @@ const VOLUME_SIDE_WIDTH: u16 = 3;
 
 /// How wide the times on each side of the progress bar can be, e.g. `-59:59`.
 const TIME_WIDTH: u16 = 6;
+
+/// How many lines the player bar takes.
+pub(super) const PLAYER_BAR_HEIGHT: u16 = 3;
+
+/// How wide the volume is in the player bar, with its icon and value: as wide as there is room
+/// for, within these bounds. The play modes are left out when it would be narrower.
+const BAR_VOLUME_MIN_WIDTH: u16 = 16;
+const BAR_VOLUME_MAX_WIDTH: u16 = 28;
+
+/// How far apart things are on a line of the player bar.
+const BAR_GAP: u16 = 3;
 
 /// What to show where the album art goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,12 +159,16 @@ pub(super) fn render_now_playing(
 
     // The volume slider lines up with the controls above it, unless they are too narrow (with
     // icons), and the progress bar with the slider.
-    let controls = controls_line(group, symbols, theme);
+    let controls = controls_line(group, symbols, theme, true);
     let volume_width = volume_width(&controls);
-    let controls_width = u16::try_from(controls.width()).unwrap_or(u16::MAX);
+    let controls_width = width(&controls);
     frame.render_widget(Paragraph::new(controls).centered(), controls_area);
     if let Some(end) = group.sleep_timer {
-        render_sleep_timer(end, symbols, theme, frame, controls_area, controls_width);
+        // Where `Paragraph::centered` puts the controls
+        let controls_end = controls_area.x
+            + controls_area.width.saturating_sub(controls_width) / 2
+            + controls_width;
+        render_sleep_timer(end, symbols, theme, frame, controls_area, controls_end);
     }
     let slider_area = render_volume(
         group,
@@ -196,12 +211,83 @@ pub(super) fn render_now_playing(
     }
 }
 
+/// What `group` is playing, in a bar of [`PLAYER_BAR_HEIGHT`] lines: the track and where it comes
+/// from, how far into it playback is, then the controls and the volume.
+pub(super) fn render_player_bar(
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let area = area.inner(Margin::new(1, 0));
+    let [info_area, progress_area, controls_area] =
+        Layout::vertical([Constraint::Length(1); 3]).areas(area);
+
+    // The track, with where it comes from on the right if there is room for both
+    let mut info = match &group.now_playing {
+        Some(track) => title_line(track, theme),
+        None => Line::styled("Nothing playing", Style::default().fg(theme.muted)),
+    };
+    if let Some(track) = group.now_playing.as_ref().filter(|track| !track.is_station) {
+        info.push_span(Span::styled(" · ", Style::default().fg(theme.muted)));
+        info.push_span(Span::styled(
+            track.artist.as_deref().unwrap_or("Unknown artist"),
+            Style::default().fg(theme.artist),
+        ));
+    }
+    let source = group
+        .source
+        .as_ref()
+        .map(|source| source_line(source, symbols, theme))
+        .unwrap_or_default();
+    let source_width = width(&source);
+    if width(&info) + BAR_GAP + source_width <= info_area.width {
+        let x = info_area.right() - source_width;
+        let source_area = Rect {
+            x,
+            width: source_width,
+            ..info_area
+        };
+        frame.render_widget(source, source_area);
+    }
+    frame.render_widget(info, info_area);
+
+    let bar_area = progress_area.inner(Margin::new(TIME_WIDTH + 1, 0));
+    render_progress(group, theme, frame, progress_area, bar_area);
+
+    // The controls on the left, without the play modes if they leave too little room for the
+    // volume on the right
+    let mut controls = controls_line(group, symbols, theme, true);
+    if width(&controls) + BAR_GAP + BAR_VOLUME_MIN_WIDTH > controls_area.width {
+        controls = controls_line(group, symbols, theme, false);
+    }
+    let controls_width = width(&controls);
+    let volume_width = controls_area
+        .width
+        .saturating_sub(controls_width + BAR_GAP)
+        .min(BAR_VOLUME_MAX_WIDTH);
+    let [controls_area, volume_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(volume_width)])
+            .spacing(BAR_GAP)
+            .areas(controls_area);
+    frame.render_widget(controls, controls_area);
+    if let Some(end) = group.sleep_timer {
+        let controls_end = controls_area.x + controls_width;
+        render_sleep_timer(end, symbols, theme, frame, controls_area, controls_end);
+    }
+    render_volume(group, symbols, theme, frame, volume_area);
+}
+
+/// How wide `line` is, in columns.
+fn width(line: &Line) -> u16 {
+    u16::try_from(line.width()).unwrap_or(u16::MAX)
+}
+
 /// How wide the volume is, with the slider between its icon and value: as wide as the
 /// `controls` above it, unless they are too narrow.
 fn volume_width(controls: &Line) -> u16 {
-    u16::try_from(controls.width())
-        .unwrap_or(u16::MAX)
-        .max(MIN_VOLUME_WIDTH)
+    width(controls).max(MIN_VOLUME_WIDTH)
 }
 
 /// A square in the middle of `area`, with an icon in it, where the album art goes when there is
@@ -228,7 +314,7 @@ fn render_art_placeholder(
 /// How wide what `group` is playing needs to be for the controls, the volume and the progress bar
 /// to fit.
 pub(super) fn now_playing_width(group: &GroupState, symbols: &Symbols, theme: &Theme) -> u16 {
-    let volume = volume_width(&controls_line(group, symbols, theme));
+    let volume = volume_width(&controls_line(group, symbols, theme, true));
     // The progress bar is as wide as the volume slider, with the times on each side of it.
     let bar = volume.saturating_sub(2 * (VOLUME_SIDE_WIDTH + 1));
     volume.max(bar + 2 * (TIME_WIDTH + 1))
@@ -284,9 +370,14 @@ fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
     Line::from(spans)
 }
 
-/// The playback controls between the play modes, shuffle on the left and repeat on the right,
-/// highlighting the playback status and the play modes that are on.
-fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'static> {
+/// The playback controls, between the play modes if `play_modes`, shuffle on the left and repeat
+/// on the right, highlighting the playback status and the play modes that are on.
+fn controls_line(
+    group: &GroupState,
+    symbols: &Symbols,
+    theme: &Theme,
+    play_modes: bool,
+) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = match group.playback {
         _ if is_playing => symbols.playing,
@@ -307,9 +398,12 @@ fn controls_line(group: &GroupState, symbols: &Symbols, theme: &Theme) -> Line<'
         (repeat, modes.repeat || modes.repeat_one, Action::Repeat),
     ];
 
+    let shown = items
+        .into_iter()
+        .filter(|(_, _, action)| play_modes || !matches!(action, Action::Shuffle | Action::Repeat));
     let mut spans = Vec::new();
-    for (i, (label, on, action)) in items.into_iter().enumerate() {
-        if i > 0 {
+    for (label, on, action) in shown {
+        if !spans.is_empty() {
             spans.push(Span::raw("   "));
         }
         let style = match (supports(group, action), on) {
@@ -479,15 +573,15 @@ pub(super) fn volume_text(volume: Option<u8>) -> String {
     volume.map_or_else(|| " --".to_owned(), |v| format!("{v:>3}"))
 }
 
-/// The time left on a sleep timer running out at `end`, to the right of the controls, which are
-/// `controls_width` wide in the middle of `area`, if there is room for it.
+/// The time left on a sleep timer running out at `end`, to the right of the controls, which end at
+/// `controls_end` in `area`, if there is room for it.
 fn render_sleep_timer(
     end: Instant,
     symbols: &Symbols,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
-    controls_width: u16,
+    controls_end: u16,
 ) {
     // As far from the controls as they are from each other
     const GAP: u16 = 3;
@@ -495,11 +589,14 @@ fn render_sleep_timer(
         format!("{} {}", symbols.sleep_timer, sleep_timer_text(end)),
         Style::default().fg(theme.on),
     );
-    let width = u16::try_from(timer.width()).unwrap_or(u16::MAX);
-    // Where `Paragraph::centered` puts the controls
-    let x = area.x + area.width.saturating_sub(controls_width) / 2 + controls_width + GAP;
-    let timer_area = Rect { x, width, ..area }.intersection(area);
-    if timer_area.width == width {
+    let timer_width = width(&timer);
+    let timer_area = Rect {
+        x: controls_end + GAP,
+        width: timer_width,
+        ..area
+    }
+    .intersection(area);
+    if timer_area.width == timer_width {
         frame.render_widget(timer, timer_area);
     }
 }
