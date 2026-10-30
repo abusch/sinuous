@@ -1,11 +1,12 @@
-//! The panel on the left, listing the groups, the speakers of one, or things played or to play.
+//! Panels listing the groups or the speakers of one, on the left, or things played or to play.
 
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType::Rounded, Padding, Paragraph},
+    text::{Line, Span, Text},
+    widgets::{Block, BorderType::Rounded, Padding, Paragraph, Widget},
 };
 
 use sinuous_client::{
@@ -44,7 +45,7 @@ pub(super) fn render_group_panel(
         .groups
         .iter()
         .enumerate()
-        .map(|(i, group)| group_lines(group, i == selected, symbols, theme))
+        .map(|(i, group)| Text::from(Vec::from(group_lines(group, i == selected, symbols, theme))))
         .collect();
     render_panel(
         frame,
@@ -53,23 +54,25 @@ pub(super) fn render_group_panel(
         Line::from(" Groups "),
         GROUP_PANEL_HELP,
         None,
+        GROUP_HEIGHT,
         items,
         highlight,
     );
 }
 
-/// A panel titled `title` in `area`, listing `items` a line apart, scrolled so that the one at
-/// `highlight` is shown, and highlighted, with the keys to use (`help`) at the bottom, and `note`
-/// above the items, if any.
+/// A panel titled `title` in `area`, listing `items` of `item_height` lines, a line apart if they
+/// take several, scrolled so that the one at `highlight` is shown, and highlighted, with the keys
+/// to use (`help`) at the bottom, and `note` above the items, if any.
 #[expect(clippy::too_many_arguments)]
-fn render_panel<const N: usize>(
+fn render_panel(
     frame: &mut Frame,
     theme: &Theme,
     area: Rect,
     title: Line,
     help: &str,
     note: Option<Line>,
-    items: Vec<[Line; N]>,
+    item_height: u16,
+    items: Vec<impl Widget>,
     highlight: &mut PanelHighlight,
 ) {
     let help = Line::from(help)
@@ -79,7 +82,8 @@ fn render_panel<const N: usize>(
         .border_type(Rounded)
         .border_style(Style::default().fg(theme.border))
         .style(theme.popup())
-        .padding(Padding::vertical(1))
+        // Off the border on the right too, as the items are after the bar on the left
+        .padding(Padding::new(0, 1, 1, 1))
         .title_top(title)
         .title_bottom(help);
     let mut inner = block.inner(area);
@@ -98,17 +102,17 @@ fn render_panel<const N: usize>(
         inner = rest;
     }
 
-    // Items are a line apart, and scrolled so that the highlighted one is shown.
-    let item_height = u16::try_from(N).unwrap_or(u16::MAX);
-    let shown = usize::from((inner.height + 1) / (item_height + 1)).max(1);
+    // Items are scrolled so that the highlighted one is shown.
+    let gap = u16::from(item_height > 1);
+    let shown = usize::from((inner.height + gap) / (item_height + gap)).max(1);
     highlight.scroll(shown);
     let PanelHighlight {
         item: highlighted,
         first,
         ..
     } = *highlight;
-    let rows = (inner.y..).step_by(usize::from(item_height + 1));
-    for ((i, lines), y) in items.into_iter().enumerate().skip(first).zip(rows) {
+    let rows = (inner.y..).step_by(usize::from(item_height + gap));
+    for ((i, item), y) in items.into_iter().enumerate().skip(first).zip(rows) {
         let item_area = Rect {
             y,
             height: item_height,
@@ -138,7 +142,23 @@ fn render_panel<const N: usize>(
                 bar_area,
             );
         }
-        frame.render_widget(Paragraph::new(Vec::from(lines)), lines_area);
+        frame.render_widget(item, lines_area);
+    }
+}
+
+/// Lines side by side, in columns as wide as `widths`, so that the lines of the items of a list
+/// line up.
+struct Columns<'a> {
+    cells: Vec<Line<'a>>,
+    widths: &'static [Constraint],
+}
+
+impl Widget for Columns<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let areas = Layout::horizontal(self.widths).spacing(2).split(area);
+        for (cell, area) in self.cells.into_iter().zip(areas.iter()) {
+            cell.render(*area, buf);
+        }
     }
 }
 
@@ -224,7 +244,11 @@ pub(super) fn render_group_editor(
     let items = state
         .players
         .iter()
-        .map(|player| speaker_lines(state, player, group, editor, symbols, theme))
+        .map(|player| {
+            Text::from(Vec::from(speaker_lines(
+                state, player, group, editor, symbols, theme,
+            )))
+        })
         .collect();
     render_panel(
         frame,
@@ -233,6 +257,7 @@ pub(super) fn render_group_editor(
         Line::from(" Group speakers "),
         GROUP_EDITOR_HELP,
         None,
+        2,
         items,
         &mut editor.highlight,
     );
@@ -342,7 +367,7 @@ pub(super) fn render_browser(
                     let items = queue
                         .items
                         .iter()
-                        .map(|entry| queue_entry_lines(entry, current, symbols, theme))
+                        .map(|entry| queue_entry_row(entry, current, symbols, theme))
                         .collect();
                     // The queue keeps what was last played from it.
                     let note = current.is_none().then_some("Not playing from the queue");
@@ -358,30 +383,23 @@ pub(super) fn render_browser(
             };
             (help, note, items)
         }
-        // Its items are a line each, unlike the other tabs'.
         Tab::History => {
             let items: Vec<_> = state
                 .history
                 .iter()
-                .map(|item| [history_line(item, symbols, theme)])
+                .map(|item| Columns {
+                    cells: vec![history_line(item, symbols, theme)],
+                    widths: &[Constraint::Fill(1)],
+                })
                 .collect();
             let note = items.is_empty().then_some("Nothing played recently");
-            return render_panel(
-                frame,
-                theme,
-                area,
-                title,
-                BROWSER_HELP,
-                note.map(|note| Line::styled(note, muted)),
-                items,
-                &mut browser.highlight,
-            );
+            (BROWSER_HELP, note, items)
         }
         Tab::Favorites => {
             let items: Vec<_> = state
                 .favorites
                 .iter()
-                .map(|favorite| favorite_lines(favorite, symbols, theme))
+                .map(|favorite| favorite_row(favorite, symbols, theme))
                 .collect();
             let note = items.is_empty().then_some("No favorites");
             (BROWSER_HELP, note, items)
@@ -390,7 +408,7 @@ pub(super) fn render_browser(
             let items: Vec<_> = state
                 .playlists
                 .iter()
-                .map(|playlist| playlist_lines(playlist, theme))
+                .map(|playlist| playlist_row(playlist, theme))
                 .collect();
             let note = items.is_empty().then_some("No playlists");
             (BROWSER_HELP, note, items)
@@ -403,52 +421,60 @@ pub(super) fn render_browser(
         title,
         help,
         note.map(|note| Line::styled(note, muted)),
+        1,
         items,
         &mut browser.highlight,
     );
 }
 
-/// The lines showing `entry` of a queue: its title, then its artist, album and duration. The
-/// track at position `current`, if any, is marked as playing.
-fn queue_entry_lines<'a>(
+/// The row showing `entry` of a queue: its title, artist, album and duration. The track at
+/// position `current`, if any, is marked as playing.
+fn queue_entry_row<'a>(
     entry: &'a QueueEntry,
     current: Option<u32>,
     symbols: &Symbols,
     theme: &Theme,
-) -> [Line<'a>; 2] {
-    let muted = Style::default().fg(theme.muted);
+) -> Columns<'a> {
     let mut title_style = Style::default().add_modifier(Modifier::BOLD);
-    let mut title_line = Vec::new();
+    let mut title = Vec::new();
     if current == Some(entry.position) {
         title_style = title_style.fg(theme.name);
-        title_line.push(Span::styled(
+        title.push(Span::styled(
             format!("{} ", symbols.playing),
             Style::default().fg(theme.on),
         ));
     }
-    title_line.push(Span::styled(
+    title.push(Span::styled(
         entry.name.as_deref().unwrap_or("Unknown title"),
         title_style,
     ));
 
-    let mut details = vec![Span::styled(
+    let artist = Line::styled(
         entry.artist.as_deref().unwrap_or("Unknown artist"),
         Style::default().fg(theme.artist),
-    )];
-    if let Some(album) = &entry.album {
-        details.push(Span::styled(" · ", muted));
-        details.push(Span::styled(
-            album.as_str(),
-            Style::default().fg(theme.secondary),
-        ));
-    }
-    if let Some(millis) = entry.duration_millis {
+    );
+    let album = Line::styled(
+        entry.album.as_deref().unwrap_or_default(),
+        Style::default().fg(theme.secondary),
+    );
+    let duration = entry.duration_millis.map(|millis| {
         let secs = u32::try_from(millis / 1000).unwrap_or(u32::MAX);
-        details.push(Span::styled(" · ", muted));
-        details.push(Span::styled(format_duration(secs), muted));
+        Line::styled(format_duration(secs), Style::default().fg(theme.muted)).right_aligned()
+    });
+    Columns {
+        cells: vec![
+            Line::from(title),
+            artist,
+            album,
+            duration.unwrap_or_default(),
+        ],
+        widths: &[
+            Constraint::Fill(3),
+            Constraint::Fill(2),
+            Constraint::Fill(2),
+            Constraint::Length(6),
+        ],
     }
-
-    [Line::from(title_line), Line::from(details)]
 }
 
 /// The line showing `item` of the history: what it is, then its name, muted if it can't be
@@ -487,27 +513,30 @@ fn kind_spans(kind: Option<&'static str>, symbols: &Symbols, theme: &Theme) -> V
     .unwrap_or_default()
 }
 
-/// The lines showing `playlist`: its name, then how many tracks it has.
-fn playlist_lines<'a>(playlist: &'a PlaylistSummary, theme: &Theme) -> [Line<'a>; 2] {
+/// The row showing `playlist`: its name and how many tracks it has.
+fn playlist_row<'a>(playlist: &'a PlaylistSummary, theme: &Theme) -> Columns<'a> {
     let tracks = playlist.track_count.map(|count| {
         let tracks = if count == 1 { "track" } else { "tracks" };
         Line::styled(
             format!("{count} {tracks}"),
             Style::default().fg(theme.muted),
         )
+        .right_aligned()
     });
-    [
-        Line::styled(
-            playlist.name.as_str(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        tracks.unwrap_or_default(),
-    ]
+    Columns {
+        cells: vec![
+            Line::styled(
+                playlist.name.as_str(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            tracks.unwrap_or_default(),
+        ],
+        widths: &[Constraint::Fill(1), Constraint::Length(12)],
+    }
 }
 
-/// The lines showing `favorite`: what it is and its name, then its music service and its
-/// description.
-fn favorite_lines<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> [Line<'a>; 2] {
+/// The row showing `favorite`: what it is and its name, and its music service and its description.
+fn favorite_row<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> Columns<'a> {
     let muted = Style::default().fg(theme.muted);
     let service = favorite
         .service
@@ -549,5 +578,8 @@ fn favorite_lines<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) 
         favorite.name.as_str(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
-    [Line::from(name_line), Line::from(details)]
+    Columns {
+        cells: vec![Line::from(name_line), Line::from(details)],
+        widths: &[Constraint::Fill(1), Constraint::Fill(1)],
+    }
 }

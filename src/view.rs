@@ -29,7 +29,9 @@ mod popup;
 mod system_info;
 
 pub use input::handle_input;
-use now_playing::{AlbumArt, now_playing_width, render_now_playing};
+use now_playing::{
+    AlbumArt, PLAYER_BAR_HEIGHT, now_playing_width, render_now_playing, render_player_bar,
+};
 use panel::{render_browser, render_group_editor, render_group_panel};
 use popup::{
     render_config_dialog, render_help, render_playback_menu, render_sleep_timer_picker,
@@ -478,11 +480,18 @@ pub fn render_ui(
     if let Mode::SystemInfo(scroll) = &mut ui.mode {
         return render_system_info(state, theme, scroll, frame, body);
     }
-    // The panel is as wide on every tab of the browser.
+    // The browser takes the whole width, above a bar showing what is playing.
+    if let Mode::Browser(browser) = &mut ui.mode {
+        let [panel, player] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(PLAYER_BAR_HEIGHT)])
+                .areas(body);
+        render_browser(state, group, symbols, theme, browser, frame, panel);
+        return render_player_bar(group, symbols, theme, frame, player);
+    }
+
     let panel_help = match ui.mode {
         Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
         Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
-        Mode::Browser(_) => Some(BROWSER_HELP),
         _ => None,
     };
     let now_playing = match panel_help {
@@ -503,9 +512,6 @@ pub fn render_ui(
                 }
                 Mode::GroupEditor(editor) => {
                     render_group_editor(state, symbols, theme, editor, frame, panel);
-                }
-                Mode::Browser(browser) => {
-                    render_browser(state, group, symbols, theme, browser, frame, panel);
                 }
                 _ => {}
             }
@@ -1044,9 +1050,12 @@ mod tests {
             .find(|row| row.contains("Contemplation"))
             .unwrap();
         assert!(current.contains("▌ ⏵ Contemplation"), "{current}");
-        assert!(
-            rows.iter()
-                .any(|row| row.contains("Boucle Infinie · Summit · 5:24"))
+        // Its artist, album and duration in columns on the same row
+        let columns: Vec<_> = current.split_whitespace().skip(3).collect();
+        assert_eq!(
+            columns,
+            ["Boucle", "Infinie", "Summit", "5:24", "│"],
+            "{current}"
         );
         assert!(
             !rows
@@ -1094,6 +1103,58 @@ mod tests {
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("Reading the queue")));
         assert!(!rows.iter().any(|row| row.contains("Escape")));
+    }
+
+    #[test]
+    fn browser_shows_what_is_playing_in_a_bar_below_it() {
+        use crate::sonos::{Source, TrackInfo};
+
+        let mut state = household_with_queue();
+        let group = &mut state.groups[0];
+        group.volume = Some(13);
+        group.now_playing = Some(TrackInfo {
+            title: Some("Nocturne".to_owned()),
+            artist: Some("TesseracT".to_owned()),
+            album_explicit: false,
+            duration_secs: Some(350),
+            image_url: None,
+            is_station: false,
+        });
+        group.next_track = Some(TrackInfo {
+            title: Some("Exile".to_owned()),
+            ..group.now_playing.clone().unwrap()
+        });
+        group.source = Some(Source {
+            service: Some("Spotify".to_owned()),
+            kind: Some("album".to_owned()),
+            name: Some("Altered State".to_owned()),
+        });
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+
+        let rows = screen_rows(&state, &mut ui, 120);
+        let [.., info, progress, controls] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(info.starts_with(" Nocturne · TesseracT "), "{info}");
+        assert!(
+            info.ends_with(" Spotify · Album · Altered State "),
+            "{info}"
+        );
+        assert!(progress.contains("-5:50"), "{progress}");
+        assert!(controls.starts_with(" shuffle   prev"), "{controls}");
+        assert!(controls.ends_with(" 13 "), "{controls}");
+        assert!(!rows.iter().any(|row| row.contains("Exile")));
+
+        // Without room for the source, nor for the play modes beside the volume
+        let rows = screen_rows(&state, &mut ui, 40);
+        let [.., info, _, controls] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(!info.contains("Spotify"), "{info}");
+        assert!(controls.starts_with(" prev"), "{controls}");
+        assert!(controls.ends_with(" 13 "), "{controls}");
     }
 
     #[test]
