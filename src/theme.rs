@@ -80,6 +80,11 @@ pub struct Theme {
     /// Where the album art goes when there is none to show.
     pub art_placeholder: Style,
     pub border: Color,
+    /// Keys to press, in the footer.
+    pub key: Color,
+    /// What the keys in the footer do: dimmer than `secondary`, but readable on the footer's
+    /// background, unlike `muted`.
+    pub hint: Color,
 }
 
 impl Theme {
@@ -104,6 +109,8 @@ impl Theme {
         badge: Style::new().fg(Color::Black).bg(Color::Gray),
         art_placeholder: Style::new().fg(Color::Gray).bg(Color::DarkGray),
         border: Color::Reset,
+        key: Color::LightBlue,
+        hint: Color::Gray,
     };
 
     /// The theme called `name`, if there is one.
@@ -137,6 +144,8 @@ impl Theme {
                 .fg(color(tokens::TEXT_DIM))
                 .bg(color(tokens::BG_HIGHLIGHT)),
             border: color(tokens::BORDER_FOCUSED),
+            key: color(tokens::INFO),
+            hint: color(tokens::TEXT_MUTED),
         })
     }
 

@@ -22,10 +22,7 @@ use crate::symbols::Symbols;
 use crate::theme::Theme;
 
 use super::now_playing::format_duration;
-use super::{
-    BROWSER_HELP, BROWSER_VIEW_HELP, Browser, GROUP_EDITOR_HELP, GROUP_PANEL_HELP, GroupEditor,
-    PanelHighlight, Tab, can_play_again,
-};
+use super::{Browser, GroupEditor, PanelHighlight, Tab, can_play_again};
 
 /// How many lines each group takes in the group panel.
 const GROUP_HEIGHT: u16 = 3;
@@ -52,7 +49,6 @@ pub(super) fn render_group_panel(
         theme,
         area,
         Line::from(" Groups "),
-        GROUP_PANEL_HELP,
         None,
         GROUP_HEIGHT,
         items,
@@ -61,31 +57,26 @@ pub(super) fn render_group_panel(
 }
 
 /// A panel titled `title` in `area`, listing `items` of `item_height` lines, a line apart if they
-/// take several, scrolled so that the one at `highlight` is shown, and highlighted, with the keys
-/// to use (`help`) at the bottom, and `note` above the items, if any.
+/// take several, scrolled so that the one at `highlight` is shown, and highlighted, with `note`
+/// above the items, if any.
 #[expect(clippy::too_many_arguments)]
 fn render_panel(
     frame: &mut Frame,
     theme: &Theme,
     area: Rect,
     title: Line,
-    help: &str,
     note: Option<Line>,
     item_height: u16,
     items: Vec<impl Widget>,
     highlight: &mut PanelHighlight,
 ) {
-    let help = Line::from(help)
-        .centered()
-        .style(Style::default().fg(theme.muted));
     let block = Block::bordered()
         .border_type(Rounded)
         .border_style(Style::default().fg(theme.border))
         .style(theme.popup())
         // Off the border on the right too, as the items are after the bar on the left
         .padding(Padding::new(0, 1, 1, 1))
-        .title_top(title)
-        .title_bottom(help);
+        .title_top(title);
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
     if let Some(note) = note {
@@ -255,7 +246,6 @@ pub(super) fn render_group_editor(
         theme,
         area,
         Line::from(" Group speakers "),
-        GROUP_EDITOR_HELP,
         None,
         2,
         items,
@@ -353,7 +343,7 @@ pub(super) fn render_browser(
     tabs.push(Span::raw(" "));
     let title = Line::from(tabs);
 
-    let (help, note, items) = match browser.tab {
+    let (note, items) = match browser.tab {
         Tab::Queue => {
             let queue = GroupQueue::of(state.queue.as_ref(), &group.id);
             let (note, items) = match queue {
@@ -374,14 +364,7 @@ pub(super) fn render_browser(
                     (note, items)
                 }
             };
-            // Its tracks can only be skipped to while the group plays from it.
-            let help = match queue {
-                QueueContents::Loaded(queue) if group.plays_from(queue) => BROWSER_HELP,
-                QueueContents::Loaded(_) | QueueContents::Loading | QueueContents::Failed => {
-                    BROWSER_VIEW_HELP
-                }
-            };
-            (help, note, items)
+            (note, items)
         }
         Tab::History => {
             let items: Vec<_> = state
@@ -393,7 +376,7 @@ pub(super) fn render_browser(
                 })
                 .collect();
             let note = items.is_empty().then_some("Nothing played recently");
-            (BROWSER_HELP, note, items)
+            (note, items)
         }
         Tab::Favorites => {
             let items: Vec<_> = state
@@ -402,7 +385,7 @@ pub(super) fn render_browser(
                 .map(|favorite| favorite_row(favorite, symbols, theme))
                 .collect();
             let note = items.is_empty().then_some("No favorites");
-            (BROWSER_HELP, note, items)
+            (note, items)
         }
         Tab::Playlists => {
             let items: Vec<_> = state
@@ -411,7 +394,7 @@ pub(super) fn render_browser(
                 .map(|playlist| playlist_row(playlist, theme))
                 .collect();
             let note = items.is_empty().then_some("No playlists");
-            (BROWSER_HELP, note, items)
+            (note, items)
         }
     };
     render_panel(
@@ -419,7 +402,6 @@ pub(super) fn render_browser(
         theme,
         area,
         title,
-        help,
         note.map(|note| Line::styled(note, muted)),
         1,
         items,

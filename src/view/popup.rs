@@ -56,14 +56,7 @@ pub(super) fn render_volume_mixer(
         })
         .collect();
 
-    let (area, offset) = render_popup(
-        frame,
-        theme,
-        " Volume ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Navigate • ←→ adjust • ESC close ",
-    );
+    let (area, offset) = render_popup(frame, theme, " Volume ", lines, Some(highlighted));
 
     let bar_x = area.x + u16::try_from(label_width + 2).unwrap_or(u16::MAX);
     let bar_width = u16::try_from(BAR_WIDTH).unwrap_or(u16::MAX);
@@ -111,14 +104,7 @@ pub(super) fn render_playback_menu(
         })
         .collect();
 
-    render_popup(
-        frame,
-        theme,
-        " Playback ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Navigate • SPACE change • ESC close ",
-    );
+    render_popup(frame, theme, " Playback ", lines, Some(highlighted));
 }
 
 /// The time left on the sleep timer of `group`, if it is set, lined up with the checkboxes above
@@ -155,19 +141,11 @@ pub(super) fn render_sleep_timer_picker(theme: &Theme, highlighted: usize, frame
         })
         .collect();
 
-    render_popup(
-        frame,
-        theme,
-        " Sleep timer ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Navigate • ENTER choose • ESC cancel ",
-    );
+    render_popup(frame, theme, " Sleep timer ", lines, Some(highlighted));
 }
 
 /// A popup listing all the keyboard shortcuts.
 pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
-    // The keys to use in the other popups are shown at their bottom.
     const SECTIONS: [(&str, &[(&str, &str)]); 2] = [
         (
             "Playback",
@@ -225,14 +203,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame) {
         }
     }
 
-    render_popup(
-        frame,
-        theme,
-        " Keyboard shortcuts ",
-        lines,
-        None,
-        " ESC close ",
-    );
+    render_popup(frame, theme, " Keyboard shortcuts ", lines, None);
 }
 
 /// A popup listing the settings, with the one at `highlighted` highlighted: the ones that can be
@@ -273,14 +244,7 @@ pub(super) fn render_config_dialog(
         ),
     ]));
 
-    render_popup(
-        frame,
-        theme,
-        " Configuration ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Navigate • SPACE change • ESC close ",
-    );
+    render_popup(frame, theme, " Configuration ", lines, Some(highlighted));
 }
 
 /// A popup listing the themes, with the current one (`current`) in colour, and the one at
@@ -303,18 +267,11 @@ pub(super) fn render_theme_picker(
         })
         .collect();
 
-    render_popup(
-        frame,
-        theme,
-        " Theme ",
-        lines,
-        Some(highlighted),
-        " ↑↓ Preview • ENTER choose • ESC cancel ",
-    );
+    render_popup(frame, theme, " Theme ", lines, Some(highlighted));
 }
 
 /// A popup in the middle of the screen, listing `lines` with the one at `highlighted`
-/// highlighted, if any.
+/// highlighted, if any. The keys to use in it are shown in the footer.
 ///
 /// Returns where the lines are drawn, and the index of the first one shown, which may not be 0 if
 /// they don't all fit.
@@ -324,19 +281,14 @@ fn render_popup(
     title: &str,
     lines: Vec<Line>,
     highlighted: Option<usize>,
-    help: &str,
 ) -> (Rect, usize) {
     const HIGHLIGHT_SYMBOL: &str = "⏵ ";
     const PADDING: Padding = Padding::symmetric(2, 1);
-    let help = Line::from(help)
-        .centered()
-        .style(Style::default().fg(theme.muted));
-
     // Fit the content, plus the padding and the borders
     let content_width = lines.iter().map(Line::width).max().unwrap_or(0)
         + Span::raw(HIGHLIGHT_SYMBOL).width()
         + usize::from(PADDING.left + PADDING.right);
-    let width = u16::try_from(content_width.max(help.width()) + 2).unwrap_or(u16::MAX);
+    let width = u16::try_from(content_width + 2).unwrap_or(u16::MAX);
     let height = u16::try_from(lines.len() + usize::from(PADDING.top + PADDING.bottom) + 2)
         .unwrap_or(u16::MAX);
     let area = frame
@@ -350,8 +302,7 @@ fn render_popup(
         .border_style(Style::default().fg(theme.border))
         .style(theme.popup())
         .padding(PADDING)
-        .title_top(title)
-        .title_bottom(help);
+        .title_top(title);
     let [_, lines_area] = Layout::horizontal([
         Constraint::Length(u16::try_from(Span::raw(HIGHLIGHT_SYMBOL).width()).unwrap_or(0)),
         Constraint::Fill(1),

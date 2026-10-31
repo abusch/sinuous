@@ -38,10 +38,6 @@ pub struct Symbols {
     pub previous: &'static str,
     /// Shown before the name of the current group, with what it is playing.
     pub playing_on: &'static str,
-    // In the header
-    pub help: &'static str,
-    pub config: &'static str,
-    pub quit: &'static str,
 
     // Whether groups are playing, in the group panel
     pub group_playing: &'static str,
@@ -83,9 +79,6 @@ impl Symbols {
         next: "next",
         previous: "prev",
         playing_on: "Playing on",
-        help: "help",
-        config: "config",
-        quit: "quit",
         group_playing: "⏵",
         group_paused: "⏸",
         group_stopped: "⏹",
@@ -130,9 +123,6 @@ impl Symbols {
         next: "\u{f04ad}",          // nf-md-skip_next
         previous: "\u{f04ae}",      // nf-md-skip_previous
         playing_on: "\u{f04c3}",    // nf-md-speaker
-        help: "\u{f02d7}",          // nf-md-help_circle
-        config: "\u{f0493}",        // nf-md-cog
-        quit: "\u{f0206}",          // nf-md-exit_to_app
         group_playing: "\u{f040c}", // nf-md-play_circle
         group_paused: "\u{f03e5}",  // nf-md-pause_circle
         group_stopped: "\u{f0666}", // nf-md-stop_circle

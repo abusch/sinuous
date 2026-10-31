@@ -23,9 +23,6 @@ use crate::theme::Theme;
 
 use super::Scroll;
 
-/// The keys to use in the system info.
-const HELP: &str = " ↑↓ scroll • PGUP/PGDN page • ESC close ";
-
 /// How wide labels are, for the values to line up.
 const LABEL_WIDTH: usize = 14;
 
@@ -47,12 +44,7 @@ pub(super) fn render_system_info(
         .border_type(Rounded)
         .border_style(Style::default().fg(theme.border))
         .padding(Padding::horizontal(1))
-        .title_top(" System info ")
-        .title_bottom(
-            Line::from(HELP)
-                .centered()
-                .style(Style::default().fg(theme.muted)),
-        );
+        .title_top(" System info ");
     let inner = block.inner(area);
     let lines = system_info_lines(state, theme, usize::from(inner.width));
 
@@ -521,8 +513,9 @@ mod tests {
         press(&[KeyCode::Char('i'), KeyCode::End], &state, &mut ui);
 
         let at_end = screen(&state, &mut ui, 60, 12);
-        // The title bar, then the border: the last line is just above the bottom border.
-        assert!(at_end[10].contains("Wi-Fi"), "{at_end:#?}");
+        // The title bar, then the border: the last line is just above the bottom border, and the
+        // footer.
+        assert!(at_end[9].contains("Wi-Fi"), "{at_end:#?}");
 
         press(&[KeyCode::Down], &state, &mut ui);
         assert_eq!(screen(&state, &mut ui, 60, 12), at_end);
