@@ -630,7 +630,7 @@ mod tests {
             groups: vec![
                 GroupState::new(
                     "bedroom".into(),
-                    "Bedroom + Office".to_owned(),
+                    "Bedroom + 1".to_owned(),
                     "b".into(),
                     vec!["b".into(), "o".into()],
                 ),
@@ -681,21 +681,18 @@ mod tests {
         // it joined keeps its ID.
         state.groups = vec![GroupState::new(
             "bedroom".into(),
-            "Bedroom + Office + Kitchen".to_owned(),
+            "Bedroom + 2".to_owned(),
             "b".into(),
             vec!["b".into(), "o".into(), "k".into()],
         )];
         ui.sync(&state);
-        assert_eq!(
-            ui.current_group(&state).unwrap().1.name,
-            "Bedroom + Office + Kitchen"
-        );
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + 2");
 
         // The kitchen left again, getting a group with a new ID: the group shown stays.
         state.groups = vec![
             GroupState::new(
                 "bedroom".into(),
-                "Bedroom + Office".to_owned(),
+                "Bedroom + 1".to_owned(),
                 "b".into(),
                 vec!["b".into(), "o".into()],
             ),
@@ -707,7 +704,7 @@ mod tests {
             ),
         ];
         ui.sync(&state);
-        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + Office");
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + 1");
     }
 
     #[test]
@@ -1133,7 +1130,7 @@ mod tests {
         assert!(!rows[0].contains("Bedroom"), "{}", rows[0]);
         assert!(
             rows.iter()
-                .any(|row| row.trim() == "Playing on Bedroom + Office"),
+                .any(|row| row.trim() == "Playing on Bedroom + 1"),
             "{rows:#?}"
         );
     }
@@ -1172,7 +1169,7 @@ mod tests {
         };
         assert!(info.starts_with(" Nocturne · TesseracT "), "{info}");
         assert!(
-            info.ends_with(" Spotify · Album · Altered State   Playing on Bedroom + Office "),
+            info.ends_with(" Spotify · Album · Altered State   Playing on Bedroom + 1 "),
             "{info}"
         );
         assert!(progress.contains("-5:50"), "{progress}");
@@ -1186,7 +1183,7 @@ mod tests {
         let [.., info, _, _, _] = rows.as_slice() else {
             panic!("{rows:?}");
         };
-        assert!(info.ends_with("   Playing on Bedroom + Office "), "{info}");
+        assert!(info.ends_with("   Playing on Bedroom + 1 "), "{info}");
         assert!(!info.contains("Spotify"), "{info}");
 
         // Without room for the name of the group, nor for the play modes beside the volume
@@ -1199,7 +1196,7 @@ mod tests {
         assert!(controls.ends_with(" 13 "), "{controls}");
 
         // With room for the source, but not for a longer name of the group
-        state.groups[0].name = "Bedroom + Office + Kitchen + Living Room".to_owned();
+        state.groups[0].name = "Upstairs Master Bedroom by the Window + 3".to_owned();
         let rows = screen_rows(&state, &mut ui, 70);
         let [.., info, _, _, _] = rows.as_slice() else {
             panic!("{rows:?}");
@@ -1208,7 +1205,7 @@ mod tests {
             info.ends_with(" Spotify · Album · Altered State "),
             "{info}"
         );
-        assert!(!info.contains("Kitchen"), "{info}");
+        assert!(!info.contains("Upstairs"), "{info}");
     }
 
     #[test]

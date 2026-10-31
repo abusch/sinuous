@@ -1182,22 +1182,14 @@ fn group_states(topology: &Topology) -> Vec<GroupState> {
         .groups
         .iter()
         .map(|group| {
-            // Make sure the coordinator comes first, so its name gets displayed first.
-            let coordinator = topology.players.get(&group.coordinator_id);
             let others = group
                 .player_ids
                 .iter()
                 .filter(|id| **id != group.coordinator_id)
-                .filter_map(|id| topology.players.get(id));
-            let names: Vec<_> = coordinator
-                .into_iter()
-                .chain(others)
-                .map(|p| p.name.as_str())
-                .collect();
-            let name = if names.is_empty() {
-                group.name.clone()
-            } else {
-                names.join(" + ")
+                .count();
+            let name = match topology.players.get(&group.coordinator_id) {
+                Some(coordinator) => group_name(&coordinator.name, others),
+                None => group.name.clone(),
             };
             GroupState::new(
                 group.id.clone(),
@@ -1209,6 +1201,16 @@ fn group_states(topology: &Topology) -> Vec<GroupState> {
         .collect();
     groups.sort_by(|a, b| a.name.cmp(&b.name));
     groups
+}
+
+/// The name of a group, as the Sonos app shows it: that of its coordinator, followed by how many
+/// other players are in it, e.g. `Kitchen + 2`.
+fn group_name(coordinator: &str, others: usize) -> String {
+    if others == 0 {
+        coordinator.to_owned()
+    } else {
+        format!("{coordinator} + {others}")
+    }
 }
 
 /// The players of the household, sorted by name.
@@ -1372,6 +1374,13 @@ mod tests {
     }
 
     #[test]
+    fn groups_are_named_after_their_coordinator_and_how_many_others_they_have() {
+        assert_eq!(group_name("Kitchen", 0), "Kitchen");
+        assert_eq!(group_name("Kitchen", 1), "Kitchen + 1");
+        assert_eq!(group_name("Living Room", 3), "Living Room + 3");
+    }
+
+    #[test]
     fn group_states_are_kept_across_topology_changes() {
         let mut kitchen = GroupState::new(
             "kitchen".into(),
@@ -1391,7 +1400,7 @@ mod tests {
         let mut groups = [
             GroupState::new(
                 "kitchen".into(),
-                "Kitchen + Office".to_owned(),
+                "Kitchen + 1".to_owned(),
                 "k".into(),
                 vec!["k".into(), "o".into()],
             ),
@@ -1404,7 +1413,7 @@ mod tests {
         ];
         keep_group_states(&mut groups, &old_groups);
 
-        assert_eq!(groups[0].name, "Kitchen + Office");
+        assert_eq!(groups[0].name, "Kitchen + 1");
         assert_eq!(groups[0].player_ids, ["k".into(), "o".into()]);
         assert_eq!(groups[0].volume, Some(20));
         assert_eq!(groups[1].name, "Bedroom");
