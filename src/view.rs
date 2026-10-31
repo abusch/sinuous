@@ -476,7 +476,7 @@ pub fn render_ui(
     let [title, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
 
-    render_title_bar(state, ui, group, symbols, theme, frame, title);
+    render_title_bar(state, ui, symbols, theme, frame, title);
     if let Mode::SystemInfo(scroll) = &mut ui.mode {
         return render_system_info(state, theme, scroll, frame, body);
     }
@@ -581,11 +581,10 @@ fn render_message(frame: &mut Frame, theme: &Theme, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
-/// The name of the app and of the current group, or the latest error, and the main shortcuts.
+/// The name of the app, the latest error if any, and the main shortcuts.
 fn render_title_bar(
     state: &HouseholdState,
     ui: &UiState,
-    group: &GroupState,
     symbols: &Symbols,
     theme: &Theme,
     frame: &mut Frame,
@@ -600,24 +599,18 @@ fn render_title_bar(
             .spacing(1)
             .areas(area.inner(Margin::new(1, 0)));
 
-    let mut header = vec![
-        Span::styled(
-            format!("Sinuous {}", crate_version!()),
-            Style::default()
-                .fg(theme.title)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" │ ", separator),
-    ];
-    match ui.shown_error(state) {
-        Some(err) => header.push(Span::styled(
+    let mut header = vec![Span::styled(
+        format!("Sinuous {}", crate_version!()),
+        Style::default()
+            .fg(theme.title)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some(err) = ui.shown_error(state) {
+        header.push(Span::styled(" │ ", separator));
+        header.push(Span::styled(
             err.message.as_str(),
             Style::default().fg(theme.error),
-        )),
-        None => {
-            header.push(Span::raw(format!("{} ", symbols.playing_on)));
-            header.push(Span::styled(&group.name, Style::default().fg(theme.name)));
-        }
+        ));
     }
 
     frame.render_widget(
@@ -1106,6 +1099,21 @@ mod tests {
     }
 
     #[test]
+    fn group_name_is_shown_with_what_is_playing_rather_than_in_the_header() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let rows = screen_rows(&state, &mut ui, 80);
+        assert!(!rows[0].contains("Bedroom"), "{}", rows[0]);
+        assert!(
+            rows.iter()
+                .any(|row| row.trim() == "Playing on Bedroom + Office"),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
     fn browser_shows_what_is_playing_in_a_bar_below_it() {
         use crate::sonos::{Source, TrackInfo};
 
@@ -1139,7 +1147,7 @@ mod tests {
         };
         assert!(info.starts_with(" Nocturne · TesseracT "), "{info}");
         assert!(
-            info.ends_with(" Spotify · Album · Altered State "),
+            info.ends_with(" Spotify · Album · Altered State   Playing on Bedroom + Office "),
             "{info}"
         );
         assert!(progress.contains("-5:50"), "{progress}");
@@ -1147,12 +1155,20 @@ mod tests {
         assert!(controls.ends_with(" 13 "), "{controls}");
         assert!(!rows.iter().any(|row| row.contains("Exile")));
 
-        // Without room for the source, nor for the play modes beside the volume
+        // With room for the name of the group, but not for the source
+        let rows = screen_rows(&state, &mut ui, 70);
+        let [.., info, _, _] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(info.ends_with("   Playing on Bedroom + Office "), "{info}");
+        assert!(!info.contains("Spotify"), "{info}");
+
+        // Without room for the name of the group, nor for the play modes beside the volume
         let rows = screen_rows(&state, &mut ui, 40);
         let [.., info, _, controls] = rows.as_slice() else {
             panic!("{rows:?}");
         };
-        assert!(!info.contains("Spotify"), "{info}");
+        assert!(!info.contains("Bedroom"), "{info}");
         assert!(controls.starts_with(" prev"), "{controls}");
         assert!(controls.ends_with(" 13 "), "{controls}");
     }

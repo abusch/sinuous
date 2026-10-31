@@ -36,9 +36,9 @@ pub struct Symbols {
     // Actions
     pub next: &'static str,
     pub previous: &'static str,
-    // In the header
-    /// Shown before the name of the current group.
+    /// Shown before the name of the current group, with what it is playing.
     pub playing_on: &'static str,
+    // In the header
     pub help: &'static str,
     pub config: &'static str,
     pub quit: &'static str,

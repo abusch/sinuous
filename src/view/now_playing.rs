@@ -52,7 +52,8 @@ pub(super) enum AlbumArt {
     Shown,
 }
 
-/// The track playing on `group`, how far into it playback is, its volume, and the next track.
+/// The name of `group`, the track playing on it, how far into it playback is, its volume, and the
+/// next track.
 pub(super) fn render_now_playing(
     group: &GroupState,
     symbols: &Symbols,
@@ -62,9 +63,9 @@ pub(super) fn render_now_playing(
     artwork: &mut Artwork,
     album_art: AlbumArt,
 ) {
-    // Everything but the album art: source, track information, progress, controls, volume and
-    // next track, with the gaps between them.
-    const DETAILS_HEIGHT: u16 = 12;
+    // Everything but the album art: group, source, track information, progress, controls, volume
+    // and next track, with the gaps between them.
+    const DETAILS_HEIGHT: u16 = 14;
     const MAX_ART_HEIGHT: u16 = 16;
     const MIN_ART_HEIGHT: u16 = 4;
 
@@ -80,6 +81,8 @@ pub(super) fn render_now_playing(
         0
     };
     let [
+        _,
+        group_area,
         _,
         art_area,
         _,
@@ -97,6 +100,8 @@ pub(super) fn render_now_playing(
         _,
     ] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(art_height),
         Constraint::Length(if art_height > 0 { 1 } else { 0 }),
         Constraint::Length(1),
@@ -113,6 +118,11 @@ pub(super) fn render_now_playing(
         Constraint::Fill(1),
     ])
     .areas(area);
+
+    frame.render_widget(
+        Paragraph::new(group_line(group, symbols, theme)).centered(),
+        group_area,
+    );
 
     let font_size = artwork.font_size();
     if art_height == 0 {
@@ -211,8 +221,8 @@ pub(super) fn render_now_playing(
     }
 }
 
-/// What `group` is playing, in a bar of [`PLAYER_BAR_HEIGHT`] lines: the track and where it comes
-/// from, how far into it playback is, then the controls and the volume.
+/// What `group` is playing, in a bar of [`PLAYER_BAR_HEIGHT`] lines: the track, where it comes from
+/// and the name of the group, how far into it playback is, then the controls and the volume.
 pub(super) fn render_player_bar(
     group: &GroupState,
     symbols: &Symbols,
@@ -224,7 +234,8 @@ pub(super) fn render_player_bar(
     let [info_area, progress_area, controls_area] =
         Layout::vertical([Constraint::Length(1); 3]).areas(area);
 
-    // The track, with where it comes from on the right if there is room for both
+    // The track, with the name of the group on the right if there is room for both, and where the
+    // track comes from before it if there is room for that too
     let mut info = match &group.now_playing {
         Some(track) => title_line(track, theme),
         None => Line::styled("Nothing playing", Style::default().fg(theme.muted)),
@@ -241,15 +252,24 @@ pub(super) fn render_player_bar(
         .as_ref()
         .map(|source| source_line(source, symbols, theme))
         .unwrap_or_default();
-    let source_width = width(&source);
-    if width(&info) + BAR_GAP + source_width <= info_area.width {
-        let x = info_area.right() - source_width;
-        let source_area = Rect {
-            x,
-            width: source_width,
-            ..info_area
-        };
-        frame.render_widget(source, source_area);
+    let mut room = info_area.width.saturating_sub(width(&info));
+    let mut end = info_area.right();
+    for line in [group_line(group, symbols, theme), source] {
+        let line_width = width(&line);
+        if line_width == 0 || BAR_GAP + line_width > room {
+            break;
+        }
+        let x = end - line_width;
+        frame.render_widget(
+            line,
+            Rect {
+                x,
+                width: line_width,
+                ..info_area
+            },
+        );
+        room -= BAR_GAP + line_width;
+        end = x - BAR_GAP;
     }
     frame.render_widget(info, info_area);
 
@@ -318,6 +338,15 @@ pub(super) fn now_playing_width(group: &GroupState, symbols: &Symbols, theme: &T
     // The progress bar is as wide as the volume slider, with the times on each side of it.
     let bar = volume.saturating_sub(2 * (VOLUME_SIDE_WIDTH + 1));
     volume.max(bar + 2 * (TIME_WIDTH + 1))
+}
+
+/// The name of `group`, e.g. `Playing on Kitchen`, or `󰓃 Kitchen` with icons.
+fn group_line<'a>(group: &'a GroupState, symbols: &Symbols, theme: &Theme) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(symbols.playing_on, Style::default().fg(theme.secondary)),
+        Span::raw(" "),
+        Span::styled(group.name.as_str(), Style::default().fg(theme.name)),
+    ])
 }
 
 /// Where the music comes from, e.g. `Spotify · Album · Altered State`, or `Spotify · 󰀥 Altered
