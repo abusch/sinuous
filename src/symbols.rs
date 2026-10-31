@@ -46,6 +46,8 @@ pub struct Symbols {
 
     /// Where the album art goes when there is none to show.
     pub no_art: &'static str,
+    /// After the name of explicit tracks.
+    pub explicit: Badge,
 
     // Settings in the configuration dialog
     pub checked: &'static str,
@@ -54,6 +56,15 @@ pub struct Symbols {
 
     // In the playback menu
     pub sleep_timer: &'static str,
+}
+
+/// A mark after the name of something, e.g. of explicit tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Badge {
+    /// Text on a background, padded on both sides, e.g. ` E `.
+    Label(&'static str),
+    /// An icon that is a badge itself, with no background.
+    Icon(&'static str),
 }
 
 impl Symbols {
@@ -83,6 +94,7 @@ impl Symbols {
         group_paused: "⏸",
         group_stopped: "⏹",
         no_art: "♪",
+        explicit: Badge::Label(" E "),
         checked: "[x]",
         unchecked: "[ ]",
         theme: "🎨",
@@ -120,17 +132,18 @@ impl Symbols {
             ("bandcamp", "\u{f2d5}"),    // nf-fa-bandcamp
             ("mixcloud", "\u{f289}"),    // nf-fa-mixcloud
         ],
-        next: "\u{f04ad}",          // nf-md-skip_next
-        previous: "\u{f04ae}",      // nf-md-skip_previous
-        playing_on: "\u{f04c3}",    // nf-md-speaker
-        group_playing: "\u{f040c}", // nf-md-play_circle
-        group_paused: "\u{f03e5}",  // nf-md-pause_circle
-        group_stopped: "\u{f0666}", // nf-md-stop_circle
-        no_art: "\u{f075a}",        // nf-md-music
-        checked: "\u{f0132}",       // nf-md-checkbox_marked
-        unchecked: "\u{f0131}",     // nf-md-checkbox_blank_outline
-        theme: "\u{f03d8}",         // nf-md-palette
-        sleep_timer: "\u{f04b2}",   // nf-md-sleep
+        next: "\u{f04ad}",                  // nf-md-skip_next
+        previous: "\u{f04ae}",              // nf-md-skip_previous
+        playing_on: "\u{f04c3}",            // nf-md-speaker
+        group_playing: "\u{f040c}",         // nf-md-play_circle
+        group_paused: "\u{f03e5}",          // nf-md-pause_circle
+        group_stopped: "\u{f0666}",         // nf-md-stop_circle
+        no_art: "\u{f075a}",                // nf-md-music
+        explicit: Badge::Icon("\u{f0b0c}"), // nf-md-alpha_e_box
+        checked: "\u{f0132}",               // nf-md-checkbox_marked
+        unchecked: "\u{f0131}",             // nf-md-checkbox_blank_outline
+        theme: "\u{f03d8}",                 // nf-md-palette
+        sleep_timer: "\u{f04b2}",           // nf-md-sleep
     };
 
     /// The volume level `volume` is shown as.

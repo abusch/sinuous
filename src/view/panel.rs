@@ -21,7 +21,7 @@ use crate::sonos::{GroupQueue, GroupState, HouseholdState, PlayerInfo, QueueCont
 use crate::symbols::Symbols;
 use crate::theme::Theme;
 
-use super::now_playing::format_duration;
+use super::now_playing::{explicit_badge, format_duration};
 use super::{Browser, GroupEditor, PanelHighlight, Tab, can_play_again};
 
 /// How many lines each group takes in the group panel.
@@ -431,8 +431,7 @@ fn queue_entry_row<'a>(
         title_style,
     ));
     if entry.explicit {
-        title.push(Span::raw(" "));
-        title.push(Span::styled(" E ", theme.badge));
+        title.extend(explicit_badge(symbols, theme));
     }
 
     let artist = Line::styled(
@@ -479,8 +478,7 @@ fn history_line<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> 
     let mut line = kind_spans(kind, symbols, theme);
     line.push(Span::styled(item.name.as_str(), name_style));
     if item.explicit {
-        line.push(Span::raw(" "));
-        line.push(Span::styled(" E ", theme.badge));
+        line.extend(explicit_badge(symbols, theme));
     }
     Line::from(line)
 }
