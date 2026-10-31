@@ -961,7 +961,7 @@ mod tests {
             .collect()
     }
 
-    /// The household, with a queue of three tracks read for the bedroom.
+    /// The household, with a queue of three tracks read for the bedroom, the last one explicit.
     pub(super) fn household_with_queue() -> HouseholdState {
         use sinuous_client::queue::{Queue, QueueEntry};
 
@@ -973,6 +973,7 @@ mod tests {
             image_url: None,
             duration_millis: Some(324_000),
             uri: None,
+            explicit: position == 3,
         };
         let mut state = household();
         state.queue = Some(GroupQueue {
@@ -1025,6 +1026,24 @@ mod tests {
         );
         assert!(rows.iter().any(|row| row.contains("Nothing playing")));
         assert!(rows.last().unwrap().contains("ENTER play"));
+    }
+
+    #[test]
+    fn queue_marks_explicit_tracks() {
+        let state = household_with_queue();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        ui.sync(&state);
+
+        let rows = screen_rows(&state, &mut ui, 120);
+        let row = |name| rows.iter().find(|row| row.contains(name)).unwrap();
+        assert!(
+            row("Ascension").contains("Ascension  E "),
+            "{}",
+            row("Ascension")
+        );
+        assert!(!row("Escape").contains(" E "), "{}", row("Escape"));
     }
 
     #[test]
@@ -1145,7 +1164,7 @@ mod tests {
         group.now_playing = Some(TrackInfo {
             title: Some("Nocturne".to_owned()),
             artist: Some("TesseracT".to_owned()),
-            album_explicit: false,
+            explicit: false,
             duration_secs: Some(350),
             image_url: None,
             is_station: false,
@@ -1322,7 +1341,7 @@ mod tests {
         state.groups[0].now_playing = Some(TrackInfo {
             title: Some("franceinfo".to_owned()),
             artist: None,
-            album_explicit: false,
+            explicit: false,
             duration_secs: None,
             image_url: None,
             is_station: true,
@@ -1341,7 +1360,7 @@ mod tests {
         let track = |title: &str| TrackInfo {
             title: Some(title.to_owned()),
             artist: Some("Candlemass".to_owned()),
-            album_explicit: false,
+            explicit: false,
             duration_secs: None,
             image_url: None,
             is_station: false,

@@ -394,7 +394,7 @@ fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
         track.title.as_deref().unwrap_or("Unknown title"),
         Style::default().add_modifier(Modifier::BOLD),
     )];
-    if track.album_explicit {
+    if track.explicit {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(" E ", theme.badge));
     }

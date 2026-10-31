@@ -430,6 +430,10 @@ fn queue_entry_row<'a>(
         entry.name.as_deref().unwrap_or("Unknown title"),
         title_style,
     ));
+    if entry.explicit {
+        title.push(Span::raw(" "));
+        title.push(Span::styled(" E ", theme.badge));
+    }
 
     let artist = Line::styled(
         entry.artist.as_deref().unwrap_or("Unknown artist"),
