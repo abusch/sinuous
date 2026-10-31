@@ -81,7 +81,7 @@ enum Mode {
     },
     /// The keyboard shortcuts.
     Help,
-    /// The details of each speaker, in place of everything but the title bar.
+    /// The details of each speaker, in place of everything but the title bar and the footer.
     SystemInfo(Scroll),
     /// The configuration dialog, and the theme picker on top of it, if open.
     Config {
@@ -521,28 +521,29 @@ pub fn render_ui(
         render_now_playing(group, symbols, theme, frame, area, artwork, album_art);
     }
 
-    // Popups, on top of everything else
+    // Popups, on top of everything else but the title bar and the footer, which shows the keys to
+    // use in them
     match ui.mode {
         Mode::VolumeMixer(highlighted) => {
-            render_volume_mixer(state, group, theme, highlighted, frame);
+            render_volume_mixer(state, group, theme, highlighted, frame, body);
         }
         Mode::PlaybackMenu {
             highlighted,
             sleep_timer_picker,
         } => {
-            render_playback_menu(group, symbols, theme, highlighted, frame);
+            render_playback_menu(group, symbols, theme, highlighted, frame, body);
             if let Some(highlighted) = sleep_timer_picker {
-                render_sleep_timer_picker(theme, highlighted, frame);
+                render_sleep_timer_picker(theme, highlighted, frame, body);
             }
         }
-        Mode::Help => render_help(theme, frame),
+        Mode::Help => render_help(theme, frame, body),
         Mode::Config {
             highlighted,
             theme_picker,
         } => {
-            render_config_dialog(settings, symbols, theme, highlighted, frame);
+            render_config_dialog(settings, symbols, theme, highlighted, frame, body);
             if let Some(highlighted) = theme_picker {
-                render_theme_picker(&settings.theme, theme, highlighted, frame);
+                render_theme_picker(&settings.theme, theme, highlighted, frame, body);
             }
         }
         Mode::NowPlaying
@@ -928,9 +929,18 @@ mod tests {
 
     /// Draw the UI, and return its rows.
     fn screen_rows(state: &HouseholdState, ui: &mut UiState, width: u16) -> Vec<String> {
+        sized_screen_rows(state, ui, width, 30)
+    }
+
+    fn sized_screen_rows(
+        state: &HouseholdState,
+        ui: &mut UiState,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
         terminal
             .draw(|f| {
@@ -1071,11 +1081,46 @@ mod tests {
         assert!(footer.ends_with(" ? help • , config • q quit "), "{footer}");
         assert!(!rows[0].contains("help"), "{}", rows[0]);
 
+        // The keys opening something are shown first, in a terminal of the default size.
+        let rows = sized_screen_rows(&state, &mut ui, 80, 24);
+        let footer = rows.last().unwrap();
+        assert!(
+            footer.starts_with(" SPACE play/pause • l queue • g groups • . playback "),
+            "{footer}"
+        );
+        assert!(footer.ends_with(" ? help • , config • q quit "), "{footer}");
+
+        // Too narrow for all the global keys: the ones that fit are shown whole.
+        let rows = screen_rows(&state, &mut ui, 20);
+        assert_eq!(rows.last().unwrap(), "  ? help • , config ");
+        let rows = screen_rows(&state, &mut ui, 14);
+        assert_eq!(rows.last().unwrap(), "       ? help ");
+
         // In a popup, the keys to close it rather than the global ones
         press(&[KeyCode::Char('v')], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 100);
         let footer = rows.last().unwrap();
         assert_eq!(footer.trim_end(), " ↑↓ navigate • ←→ adjust • ESC close");
+
+        // Popups don't cover the footer, even when they don't fit above it.
+        press(&[KeyCode::Esc, KeyCode::Char('?')], &state, &mut ui);
+        let rows = sized_screen_rows(&state, &mut ui, 80, 24);
+        assert_eq!(rows.last().unwrap().trim_end(), " ESC close");
+    }
+
+    #[test]
+    fn footer_gives_all_its_room_to_the_keys_to_use_when_there_are_no_global_ones() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('G')], &state, &mut ui);
+
+        // Exactly as wide as the keys, plus a column on each side
+        let rows = screen_rows(&state, &mut ui, 55);
+        assert_eq!(
+            rows.last().unwrap(),
+            " ↑↓ navigate • SPACE toggle • ENTER apply • ESC cancel "
+        );
     }
 
     #[test]
@@ -1152,6 +1197,18 @@ mod tests {
         assert!(!info.contains("Bedroom"), "{info}");
         assert!(controls.starts_with(" prev"), "{controls}");
         assert!(controls.ends_with(" 13 "), "{controls}");
+
+        // With room for the source, but not for a longer name of the group
+        state.groups[0].name = "Bedroom + Office + Kitchen + Living Room".to_owned();
+        let rows = screen_rows(&state, &mut ui, 70);
+        let [.., info, _, _, _] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(
+            info.ends_with(" Spotify · Album · Altered State "),
+            "{info}"
+        );
+        assert!(!info.contains("Kitchen"), "{info}");
     }
 
     #[test]
@@ -1192,11 +1249,13 @@ mod tests {
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("No favorites")));
-        assert!(rows.last().unwrap().contains("ENTER play"));
+        // Nothing to play
+        assert!(!rows.last().unwrap().contains("ENTER play"));
 
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("▌ Road trip")));
+        assert!(rows.last().unwrap().contains("ENTER play"));
         assert!(
             rows.iter()
                 .any(|row| row.contains("12 tracks") && !row.contains("Playlist"))

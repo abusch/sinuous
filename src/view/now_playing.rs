@@ -235,7 +235,7 @@ pub(super) fn render_player_bar(
         Layout::vertical([Constraint::Length(1); 3]).areas(area);
 
     // The track, with the name of the group on the right if there is room for both, and where the
-    // track comes from before it if there is room for that too
+    // track comes from before it if there is room for that too, or in its place if only that fits
     let mut info = match &group.now_playing {
         Some(track) => title_line(track, theme),
         None => Line::styled("Nothing playing", Style::default().fg(theme.muted)),
@@ -257,7 +257,7 @@ pub(super) fn render_player_bar(
     for line in [group_line(group, symbols, theme), source] {
         let line_width = width(&line);
         if line_width == 0 || BAR_GAP + line_width > room {
-            break;
+            continue;
         }
         let x = end - line_width;
         frame.render_widget(
@@ -331,13 +331,15 @@ fn render_art_placeholder(
     );
 }
 
-/// How wide what `group` is playing needs to be for the controls, the volume and the progress bar
-/// to fit.
+/// How wide what `group` is playing needs to be for the name of the group, the controls, the volume
+/// and the progress bar to fit.
 pub(super) fn now_playing_width(group: &GroupState, symbols: &Symbols, theme: &Theme) -> u16 {
     let volume = volume_width(&controls_line(group, symbols, theme, true));
     // The progress bar is as wide as the volume slider, with the times on each side of it.
     let bar = volume.saturating_sub(2 * (VOLUME_SIDE_WIDTH + 1));
-    volume.max(bar + 2 * (TIME_WIDTH + 1))
+    volume
+        .max(bar + 2 * (TIME_WIDTH + 1))
+        .max(width(&group_line(group, symbols, theme)))
 }
 
 /// The name of `group`, e.g. `Playing on Kitchen`, or `󰓃 Kitchen` with icons.

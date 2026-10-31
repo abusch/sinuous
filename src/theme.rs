@@ -82,8 +82,8 @@ pub struct Theme {
     pub border: Color,
     /// Keys to press, in the footer.
     pub key: Color,
-    /// What the keys in the footer do: dimmer than `secondary`, but readable on the footer's
-    /// background, unlike `muted`.
+    /// What the keys in the footer do: dimmer than `secondary` where the theme has a colour in
+    /// between, but readable on the footer's background, unlike `muted`.
     pub hint: Color,
 }
 
@@ -110,6 +110,7 @@ impl Theme {
         art_placeholder: Style::new().fg(Color::Gray).bg(Color::DarkGray),
         border: Color::Reset,
         key: Color::LightBlue,
+        // Nothing in between `secondary` and the background of the footer
         hint: Color::Gray,
     };
 
