@@ -205,7 +205,13 @@ fn handle_theme_picker_input(
 fn handle_system_info_input(input: &KeyEvent, ui: &mut UiState, scroll: Scroll) {
     // Scrolling past the end is undone when drawing it, which is when its length is known.
     let page = scroll.page.max(1);
-    let offset = match input.code {
+    // ctrl+U and ctrl+D scroll by pages too, as in less or vim.
+    let code = match (input.code, input.modifiers) {
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => KeyCode::PageUp,
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) => KeyCode::PageDown,
+        (code, _) => code,
+    };
+    let offset = match code {
         KeyCode::Up | KeyCode::Char('k') => scroll.offset.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => scroll.offset.saturating_add(1),
         KeyCode::PageUp => scroll.offset.saturating_sub(page),

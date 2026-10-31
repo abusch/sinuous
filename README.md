@@ -88,10 +88,11 @@ sinuous --device "Living Room"
 | <kbd>?</kbd> | Keyboard shortcuts |
 | <kbd>q</kbd> | Close what is open, or quit |
 
-Panels and popups show the keys to use in them at their bottom. In the panel
-with the queue, the history, the favorites and the playlists, <kbd>Tab</kbd>
-switches between them, and <kbd>Enter</kbd> plays what is highlighted. Tracks of
-the queue can only be skipped to while the group plays from its queue.
+The bar at the bottom of the screen shows the keys to use in what is open. In
+the panel with the queue, the history, the favorites and the playlists,
+<kbd>Tab</kbd> switches between them, and <kbd>Enter</kbd> plays what is
+highlighted. Tracks of the queue can only be skipped to while the group plays
+from its queue.
 
 ## Configuration
 

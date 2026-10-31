@@ -22,12 +22,14 @@ use crate::sonos::{
 use crate::symbols::Symbols;
 use crate::theme::{THEMES, Theme};
 
+mod footer;
 mod input;
 mod now_playing;
 mod panel;
 mod popup;
 mod system_info;
 
+use footer::render_footer;
 pub use input::handle_input;
 use now_playing::{
     AlbumArt, PLAYER_BAR_HEIGHT, now_playing_width, render_now_playing, render_player_bar,
@@ -43,16 +45,9 @@ use system_info::render_system_info;
 const ERROR_DISPLAY_TIME: Duration = Duration::from_secs(5);
 
 /// How wide the panel on the left (the groups, or the speakers of one) is: a third of the screen,
-/// within these bounds, unless the keys to use need more room.
+/// within these bounds.
 const GROUP_PANEL_MIN_WIDTH: u16 = 34;
 const GROUP_PANEL_MAX_WIDTH: u16 = 48;
-
-/// The keys to use in the group panel, in the group editor, and in the browser (and on the queue
-/// tab while the group doesn't play from its queue, which has nothing to play).
-const GROUP_PANEL_HELP: &str = " ↑↓ • ENTER select • ESC close ";
-const GROUP_EDITOR_HELP: &str = " ↑↓ • SPACE toggle • ENTER apply • ESC cancel ";
-const BROWSER_HELP: &str = " TAB switch • ↑↓ • ENTER play • ESC close ";
-const BROWSER_VIEW_HELP: &str = " TAB switch • ↑↓ • ESC close ";
 
 /// What the user is looking at, independently of the state of the speakers.
 #[derive(Debug, Default)]
@@ -86,7 +81,7 @@ enum Mode {
     },
     /// The keyboard shortcuts.
     Help,
-    /// The details of each speaker, in place of everything but the title bar.
+    /// The details of each speaker, in place of everything but the title bar and the footer.
     SystemInfo(Scroll),
     /// The configuration dialog, and the theme picker on top of it, if open.
     Config {
@@ -473,10 +468,15 @@ pub fn render_ui(
     let Some((group_index, group)) = ui.current_group(state) else {
         return render_message(frame, theme, "No speakers found.\n\nPress q to quit.");
     };
-    let [title, body] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(frame.area());
+    let [title, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
 
-    render_title_bar(state, ui, group, symbols, theme, frame, title);
+    render_title_bar(state, ui, theme, frame, title);
+    render_footer(state, ui, group, theme, frame, footer);
     if let Mode::SystemInfo(scroll) = &mut ui.mode {
         return render_system_info(state, theme, scroll, frame, body);
     }
@@ -489,17 +489,9 @@ pub fn render_ui(
         return render_player_bar(group, symbols, theme, frame, player);
     }
 
-    let panel_help = match ui.mode {
-        Mode::GroupPicker(_) => Some(GROUP_PANEL_HELP),
-        Mode::GroupEditor(_) => Some(GROUP_EDITOR_HELP),
-        _ => None,
-    };
-    let now_playing = match panel_help {
-        Some(help) => {
-            let help_width = u16::try_from(Span::raw(help).width() + 2).unwrap_or(u16::MAX);
-            let width = (body.width / 3)
-                .clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH)
-                .max(help_width);
+    let now_playing = match ui.mode {
+        Mode::GroupPicker(_) | Mode::GroupEditor(_) => {
+            let width = (body.width / 3).clamp(GROUP_PANEL_MIN_WIDTH, GROUP_PANEL_MAX_WIDTH);
             let [panel, rest] =
                 Layout::horizontal([Constraint::Length(width), Constraint::Fill(1)]).areas(body);
             // When what is playing doesn't fit beside the panel, the panel takes its place rather
@@ -517,7 +509,7 @@ pub fn render_ui(
             }
             fits.then_some(rest)
         }
-        None => Some(body),
+        _ => Some(body),
     };
     if let Some(area) = now_playing {
         let album_art = match (settings.album_art, ui.popup_open()) {
@@ -529,28 +521,29 @@ pub fn render_ui(
         render_now_playing(group, symbols, theme, frame, area, artwork, album_art);
     }
 
-    // Popups, on top of everything else
+    // Popups, on top of everything else but the title bar and the footer, which shows the keys to
+    // use in them
     match ui.mode {
         Mode::VolumeMixer(highlighted) => {
-            render_volume_mixer(state, group, theme, highlighted, frame);
+            render_volume_mixer(state, group, theme, highlighted, frame, body);
         }
         Mode::PlaybackMenu {
             highlighted,
             sleep_timer_picker,
         } => {
-            render_playback_menu(group, symbols, theme, highlighted, frame);
+            render_playback_menu(group, symbols, theme, highlighted, frame, body);
             if let Some(highlighted) = sleep_timer_picker {
-                render_sleep_timer_picker(theme, highlighted, frame);
+                render_sleep_timer_picker(theme, highlighted, frame, body);
             }
         }
-        Mode::Help => render_help(theme, frame),
+        Mode::Help => render_help(theme, frame, body),
         Mode::Config {
             highlighted,
             theme_picker,
         } => {
-            render_config_dialog(settings, symbols, theme, highlighted, frame);
+            render_config_dialog(settings, symbols, theme, highlighted, frame, body);
             if let Some(highlighted) = theme_picker {
-                render_theme_picker(&settings.theme, theme, highlighted, frame);
+                render_theme_picker(&settings.theme, theme, highlighted, frame, body);
             }
         }
         Mode::NowPlaying
@@ -581,74 +574,36 @@ fn render_message(frame: &mut Frame, theme: &Theme, message: &str) {
     frame.render_widget(paragraph, area);
 }
 
-/// The name of the app and of the current group, or the latest error, and the main shortcuts.
+/// The name of the app, and the latest error if any.
 fn render_title_bar(
     state: &HouseholdState,
     ui: &UiState,
-    group: &GroupState,
-    symbols: &Symbols,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
 ) {
     // Muted text would be hard to read on the background of the header.
     let separator = Style::default().fg(theme.secondary);
-    let shortcuts = shortcuts_line(symbols, theme);
-    let shortcuts_width = u16::try_from(shortcuts.width()).unwrap_or(u16::MAX);
-    let [title_area, shortcuts_area] =
-        Layout::horizontal([Constraint::Min(1), Constraint::Length(shortcuts_width)])
-            .spacing(1)
-            .areas(area.inner(Margin::new(1, 0)));
 
-    let mut header = vec![
-        Span::styled(
-            format!("Sinuous {}", crate_version!()),
-            Style::default()
-                .fg(theme.title)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" │ ", separator),
-    ];
-    match ui.shown_error(state) {
-        Some(err) => header.push(Span::styled(
+    let mut header = vec![Span::styled(
+        format!("Sinuous {}", crate_version!()),
+        Style::default()
+            .fg(theme.title)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some(err) = ui.shown_error(state) {
+        header.push(Span::styled(" │ ", separator));
+        header.push(Span::styled(
             err.message.as_str(),
             Style::default().fg(theme.error),
-        )),
-        None => {
-            header.push(Span::raw(format!("{} ", symbols.playing_on)));
-            header.push(Span::styled(&group.name, Style::default().fg(theme.name)));
-        }
+        ));
     }
 
     frame.render_widget(
         Block::new().style(Style::default().bg(theme.title_background)),
         area,
     );
-    frame.render_widget(Line::from(header), title_area);
-    frame.render_widget(shortcuts, shortcuts_area);
-}
-
-/// The keys to press for the help, the configuration dialog and quitting.
-fn shortcuts_line(symbols: &Symbols, theme: &Theme) -> Line<'static> {
-    let entries = [
-        ("?", symbols.help),
-        (",", symbols.config),
-        ("q", symbols.quit),
-    ];
-    // Muted text would be hard to read on the background of the header.
-    let separator = Style::default().fg(theme.secondary);
-    let mut spans = Vec::new();
-    for (i, (key, label)) in entries.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" • ", separator));
-        }
-        spans.push(Span::raw(key));
-        spans.push(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(theme.secondary),
-        ));
-    }
-    Line::from(spans)
+    frame.render_widget(Line::from(header), area.inner(Margin::new(1, 0)));
 }
 
 fn is_shown(error: &ErrorMessage) -> bool {
@@ -867,7 +822,7 @@ mod tests {
             .collect();
         for shown in [
             "Group speakers",
-            GROUP_EDITOR_HELP,
+            "SPACE toggle • ENTER apply",
             "Bedroom Move",
             "In this group · coordinator",
             "On its own",
@@ -974,9 +929,18 @@ mod tests {
 
     /// Draw the UI, and return its rows.
     fn screen_rows(state: &HouseholdState, ui: &mut UiState, width: u16) -> Vec<String> {
+        sized_screen_rows(state, ui, width, 30)
+    }
+
+    fn sized_screen_rows(
+        state: &HouseholdState,
+        ui: &mut UiState,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
         use ratatui::{Terminal, backend::TestBackend};
 
-        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let (mut artwork, _) = Artwork::new(ratatui_image::picker::Picker::halfblocks(), None);
         terminal
             .draw(|f| {
@@ -1063,7 +1027,7 @@ mod tests {
                 .any(|row| row.contains("Not playing from the queue"))
         );
         assert!(rows.iter().any(|row| row.contains("Nothing playing")));
-        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
+        assert!(rows.last().unwrap().contains("ENTER play"));
     }
 
     #[test]
@@ -1085,7 +1049,7 @@ mod tests {
         assert!(!rows.iter().any(|row| row.contains("⏵ Contemplation")));
         assert!(rows.iter().any(|row| row.contains("▌ Escape")));
         // Its tracks can't be skipped to.
-        assert!(rows.iter().any(|row| row.contains(BROWSER_VIEW_HELP)));
+        assert!(!rows.last().unwrap().contains("ENTER play"));
 
         // The queue of another group is not shown.
         press(
@@ -1103,6 +1067,75 @@ mod tests {
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("Reading the queue")));
         assert!(!rows.iter().any(|row| row.contains("Escape")));
+    }
+
+    #[test]
+    fn footer_shows_the_keys_to_use_in_what_is_shown() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let rows = screen_rows(&state, &mut ui, 100);
+        let footer = rows.last().unwrap();
+        assert!(footer.starts_with(" SPACE play/pause • "), "{footer}");
+        assert!(footer.ends_with(" ? help • , config • q quit "), "{footer}");
+        assert!(!rows[0].contains("help"), "{}", rows[0]);
+
+        // The keys opening something are shown first, in a terminal of the default size.
+        let rows = sized_screen_rows(&state, &mut ui, 80, 24);
+        let footer = rows.last().unwrap();
+        assert!(
+            footer.starts_with(" SPACE play/pause • l queue • g groups • . playback "),
+            "{footer}"
+        );
+        assert!(footer.ends_with(" ? help • , config • q quit "), "{footer}");
+
+        // Too narrow for all the global keys: the ones that fit are shown whole.
+        let rows = screen_rows(&state, &mut ui, 20);
+        assert_eq!(rows.last().unwrap(), "  ? help • , config ");
+        let rows = screen_rows(&state, &mut ui, 14);
+        assert_eq!(rows.last().unwrap(), "       ? help ");
+
+        // In a popup, the keys to close it rather than the global ones
+        press(&[KeyCode::Char('v')], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 100);
+        let footer = rows.last().unwrap();
+        assert_eq!(footer.trim_end(), " ↑↓ navigate • ←→ adjust • ESC close");
+
+        // Popups don't cover the footer, even when they don't fit above it.
+        press(&[KeyCode::Esc, KeyCode::Char('?')], &state, &mut ui);
+        let rows = sized_screen_rows(&state, &mut ui, 80, 24);
+        assert_eq!(rows.last().unwrap().trim_end(), " ESC close");
+    }
+
+    #[test]
+    fn footer_gives_all_its_room_to_the_keys_to_use_when_there_are_no_global_ones() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('G')], &state, &mut ui);
+
+        // Exactly as wide as the keys, plus a column on each side
+        let rows = screen_rows(&state, &mut ui, 55);
+        assert_eq!(
+            rows.last().unwrap(),
+            " ↑↓ navigate • SPACE toggle • ENTER apply • ESC cancel "
+        );
+    }
+
+    #[test]
+    fn group_name_is_shown_with_what_is_playing_rather_than_in_the_header() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let rows = screen_rows(&state, &mut ui, 80);
+        assert!(!rows[0].contains("Bedroom"), "{}", rows[0]);
+        assert!(
+            rows.iter()
+                .any(|row| row.trim() == "Playing on Bedroom + Office"),
+            "{rows:#?}"
+        );
     }
 
     #[test]
@@ -1134,27 +1167,48 @@ mod tests {
         press(&[KeyCode::Char('l')], &state, &mut ui);
 
         let rows = screen_rows(&state, &mut ui, 120);
-        let [.., info, progress, controls] = rows.as_slice() else {
+        let [.., info, progress, controls, footer] = rows.as_slice() else {
             panic!("{rows:?}");
         };
         assert!(info.starts_with(" Nocturne · TesseracT "), "{info}");
         assert!(
-            info.ends_with(" Spotify · Album · Altered State "),
+            info.ends_with(" Spotify · Album · Altered State   Playing on Bedroom + Office "),
             "{info}"
         );
         assert!(progress.contains("-5:50"), "{progress}");
         assert!(controls.starts_with(" shuffle   prev"), "{controls}");
         assert!(controls.ends_with(" 13 "), "{controls}");
         assert!(!rows.iter().any(|row| row.contains("Exile")));
+        assert!(footer.starts_with(" TAB switch"), "{footer}");
 
-        // Without room for the source, nor for the play modes beside the volume
-        let rows = screen_rows(&state, &mut ui, 40);
-        let [.., info, _, controls] = rows.as_slice() else {
+        // With room for the name of the group, but not for the source
+        let rows = screen_rows(&state, &mut ui, 70);
+        let [.., info, _, _, _] = rows.as_slice() else {
             panic!("{rows:?}");
         };
+        assert!(info.ends_with("   Playing on Bedroom + Office "), "{info}");
         assert!(!info.contains("Spotify"), "{info}");
+
+        // Without room for the name of the group, nor for the play modes beside the volume
+        let rows = screen_rows(&state, &mut ui, 40);
+        let [.., info, _, controls, _] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(!info.contains("Bedroom"), "{info}");
         assert!(controls.starts_with(" prev"), "{controls}");
         assert!(controls.ends_with(" 13 "), "{controls}");
+
+        // With room for the source, but not for a longer name of the group
+        state.groups[0].name = "Bedroom + Office + Kitchen + Living Room".to_owned();
+        let rows = screen_rows(&state, &mut ui, 70);
+        let [.., info, _, _, _] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(
+            info.ends_with(" Spotify · Album · Altered State "),
+            "{info}"
+        );
+        assert!(!info.contains("Kitchen"), "{info}");
     }
 
     #[test]
@@ -1195,11 +1249,13 @@ mod tests {
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("No favorites")));
-        assert!(rows.iter().any(|row| row.contains(BROWSER_HELP)));
+        // Nothing to play
+        assert!(!rows.last().unwrap().contains("ENTER play"));
 
         press(&[KeyCode::Tab], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("▌ Road trip")));
+        assert!(rows.last().unwrap().contains("ENTER play"));
         assert!(
             rows.iter()
                 .any(|row| row.contains("12 tracks") && !row.contains("Playlist"))

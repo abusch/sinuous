@@ -23,9 +23,6 @@ use crate::theme::Theme;
 
 use super::Scroll;
 
-/// The keys to use in the system info.
-const HELP: &str = " ↑↓ scroll • PGUP/PGDN page • ESC close ";
-
 /// How wide labels are, for the values to line up.
 const LABEL_WIDTH: usize = 14;
 
@@ -47,12 +44,7 @@ pub(super) fn render_system_info(
         .border_type(Rounded)
         .border_style(Style::default().fg(theme.border))
         .padding(Padding::horizontal(1))
-        .title_top(" System info ")
-        .title_bottom(
-            Line::from(HELP)
-                .centered()
-                .style(Style::default().fg(theme.muted)),
-        );
+        .title_top(" System info ");
     let inner = block.inner(area);
     let lines = system_info_lines(state, theme, usize::from(inner.width));
 
@@ -521,10 +513,35 @@ mod tests {
         press(&[KeyCode::Char('i'), KeyCode::End], &state, &mut ui);
 
         let at_end = screen(&state, &mut ui, 60, 12);
-        // The title bar, then the border: the last line is just above the bottom border.
-        assert!(at_end[10].contains("Wi-Fi"), "{at_end:#?}");
+        // The title bar, then the border: the last line is just above the bottom border, and the
+        // footer.
+        assert!(at_end[9].contains("Wi-Fi"), "{at_end:#?}");
 
         press(&[KeyCode::Down], &state, &mut ui);
         assert_eq!(screen(&state, &mut ui, 60, 12), at_end);
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_scroll_by_pages_like_page_down_and_page_up() {
+        use crossterm::event::{KeyEvent, KeyModifiers};
+
+        use crate::view::handle_input;
+
+        let state = state();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('i')], &state, &mut ui);
+        let top = screen(&state, &mut ui, 60, 12);
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        press(&[KeyCode::PageDown], &state, &mut ui);
+        let page_down = screen(&state, &mut ui, 60, 12);
+        assert_ne!(page_down, top);
+        press(&[KeyCode::Home], &state, &mut ui);
+        handle_input(&ctrl('d'), &state, &UiConfig::default(), &mut ui);
+        assert_eq!(screen(&state, &mut ui, 60, 12), page_down);
+
+        handle_input(&ctrl('u'), &state, &UiConfig::default(), &mut ui);
+        assert_eq!(screen(&state, &mut ui, 60, 12), top);
     }
 }
