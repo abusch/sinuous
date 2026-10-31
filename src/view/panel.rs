@@ -21,7 +21,7 @@ use crate::sonos::{GroupQueue, GroupState, HouseholdState, PlayerInfo, QueueCont
 use crate::symbols::Symbols;
 use crate::theme::Theme;
 
-use super::now_playing::format_duration;
+use super::now_playing::{explicit_badge, format_duration};
 use super::{Browser, GroupEditor, PanelHighlight, Tab, can_play_again};
 
 /// How many lines each group takes in the group panel.
@@ -430,6 +430,9 @@ fn queue_entry_row<'a>(
         entry.name.as_deref().unwrap_or("Unknown title"),
         title_style,
     ));
+    if entry.explicit {
+        title.extend(explicit_badge(symbols, theme));
+    }
 
     let artist = Line::styled(
         entry.artist.as_deref().unwrap_or("Unknown artist"),
@@ -475,8 +478,7 @@ fn history_line<'a>(item: &'a HistoryItem, symbols: &Symbols, theme: &Theme) -> 
     let mut line = kind_spans(kind, symbols, theme);
     line.push(Span::styled(item.name.as_str(), name_style));
     if item.explicit {
-        line.push(Span::raw(" "));
-        line.push(Span::styled(" E ", theme.badge));
+        line.extend(explicit_badge(symbols, theme));
     }
     Line::from(line)
 }
@@ -517,7 +519,8 @@ fn playlist_row<'a>(playlist: &'a PlaylistSummary, theme: &Theme) -> Columns<'a>
     }
 }
 
-/// The row showing `favorite`: what it is and its name, and its music service and its description.
+/// The row showing `favorite`: what it is and its name, with a badge if it is explicit, and its music
+/// service and its description.
 fn favorite_row<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> Columns<'a> {
     let muted = Style::default().fg(theme.muted);
     let service = favorite
@@ -560,6 +563,9 @@ fn favorite_row<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) ->
         favorite.name.as_str(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
+    if favorite.resource.as_ref().is_some_and(|r| r.explicit) {
+        name_line.extend(explicit_badge(symbols, theme));
+    }
     Columns {
         cells: vec![Line::from(name_line), Line::from(details)],
         widths: &[Constraint::Fill(1), Constraint::Fill(1)],

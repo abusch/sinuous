@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
     buffer::Buffer,
     layout::{Constraint, Layout, Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph, Widget},
 };
@@ -15,7 +15,7 @@ use sinuous_client::playback::PlaybackState;
 
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
-use crate::symbols::Symbols;
+use crate::symbols::{Badge, Symbols};
 use crate::theme::Theme;
 
 use super::input::{Action, supports};
@@ -152,9 +152,9 @@ pub(super) fn render_now_playing(
 
     // Track information
     let info = match &group.now_playing {
-        Some(track) if track.is_station => vec![title_line(track, theme)],
+        Some(track) if track.is_station => vec![title_line(track, symbols, theme)],
         Some(track) => vec![
-            title_line(track, theme),
+            title_line(track, symbols, theme),
             Line::styled(
                 track.artist.as_deref().unwrap_or("Unknown artist"),
                 Style::default().fg(theme.artist),
@@ -237,7 +237,7 @@ pub(super) fn render_player_bar(
     // The track, with the name of the group on the right if there is room for both, and where the
     // track comes from before it if there is room for that too, or in its place if only that fits
     let mut info = match &group.now_playing {
-        Some(track) => title_line(track, theme),
+        Some(track) => title_line(track, symbols, theme),
         None => Line::styled("Nothing playing", Style::default().fg(theme.muted)),
     };
     if let Some(track) = group.now_playing.as_ref().filter(|track| !track.is_station) {
@@ -389,16 +389,28 @@ fn source_line<'a>(source: &'a Source, symbols: &Symbols, theme: &Theme) -> Line
 }
 
 /// The title of `track`, with a badge if it is explicit.
-fn title_line<'a>(track: &'a TrackInfo, theme: &Theme) -> Line<'a> {
+fn title_line<'a>(track: &'a TrackInfo, symbols: &Symbols, theme: &Theme) -> Line<'a> {
     let mut spans = vec![Span::styled(
         track.title.as_deref().unwrap_or("Unknown title"),
         Style::default().add_modifier(Modifier::BOLD),
     )];
-    if track.album_explicit {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(" E ", theme.badge));
+    if track.explicit {
+        spans.extend(explicit_badge(symbols, theme));
     }
     Line::from(spans)
+}
+
+/// The badge after the name of explicit tracks, a space apart. Icons are in the colour of the
+/// background of labels, as they are badges themselves.
+pub(super) fn explicit_badge(symbols: &Symbols, theme: &Theme) -> [Span<'static>; 2] {
+    let badge = match symbols.explicit {
+        Badge::Label(label) => Span::styled(label, theme.badge),
+        Badge::Icon(icon) => Span::styled(
+            icon,
+            Style::new().fg(theme.badge.bg.unwrap_or(Color::Reset)),
+        ),
+    };
+    [Span::raw(" "), badge]
 }
 
 /// The playback controls, between the play modes if `play_modes`, shuffle on the left and repeat
@@ -716,6 +728,21 @@ mod tests {
         };
         let line = source_line(&unknown_kind, Symbols::choose(true), &Theme::TERMINAL);
         assert_eq!(line.to_string(), "\u{f04c7} Spotify · Chill");
+    }
+
+    #[test]
+    fn explicit_badge_is_a_label_or_an_icon() {
+        let theme = &Theme::TERMINAL;
+        let [space, label] = explicit_badge(Symbols::choose(false), theme);
+        assert_eq!(space.content, " ");
+        assert_eq!(label.content, " E ");
+        assert_eq!(label.style, theme.badge);
+
+        let [_, icon] = explicit_badge(Symbols::choose(true), theme);
+        assert_eq!(icon.content, "\u{f0b0c}");
+        // The icon is the badge: in its colour, on no background.
+        assert_eq!(icon.style.fg, theme.badge.bg);
+        assert_eq!(icon.style.bg, None);
     }
 
     #[test]

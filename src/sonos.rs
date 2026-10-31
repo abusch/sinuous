@@ -294,8 +294,8 @@ impl Playback {
 pub struct TrackInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
-    /// Whether its album is tagged explicit. Tracks have no tags of their own.
-    pub album_explicit: bool,
+    /// Whether the track is tagged explicit.
+    pub explicit: bool,
     pub duration_secs: Option<u32>,
     /// The album art, or another picture of what is playing.
     pub image_url: Option<Url>,
@@ -318,10 +318,7 @@ impl TrackInfo {
         Some(Self {
             title: track.name.clone(),
             artist: artist.map(|a| a.name.clone()),
-            album_explicit: track
-                .album
-                .as_ref()
-                .is_some_and(|a| a.tags.contains(&Tag::TagExplicit)),
+            explicit: track.tags.contains(&Tag::TagExplicit),
             duration_secs: track.duration_millis.map(millis_to_secs),
             image_url: images.and_then(|images| images.resolve(track)),
             is_station: false,
@@ -339,7 +336,7 @@ impl TrackInfo {
         Some(Self {
             title: Some(title.clone()),
             artist: None,
-            album_explicit: false,
+            explicit: false,
             duration_secs: None,
             image_url: images.fallback.and_then(|image| images.url(image)),
             is_station: true,
@@ -1330,6 +1327,27 @@ mod tests {
                 "{state:?}"
             );
         }
+    }
+
+    #[test]
+    fn tracks_are_explicit_when_tagged_so() {
+        let item = |track_tags: &[&str], album_tags: &[&str]| -> QueueItem {
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "queueItem",
+                "track": {
+                    "_objectType": "track",
+                    "name": "The Winter of Our Passing",
+                    "album": {"_objectType": "album", "name": "City Burials", "tags": album_tags},
+                    "tags": track_tags,
+                },
+            }))
+            .unwrap()
+        };
+        let explicit = |item| TrackInfo::new(&item, None).unwrap().explicit;
+        assert!(explicit(item(&["TAG_EXPLICIT"], &[])));
+        assert!(!explicit(item(&[], &[])));
+        // Explicit albums can have clean tracks.
+        assert!(!explicit(item(&[], &["TAG_EXPLICIT"])));
     }
 
     #[test]
