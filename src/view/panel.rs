@@ -519,7 +519,8 @@ fn playlist_row<'a>(playlist: &'a PlaylistSummary, theme: &Theme) -> Columns<'a>
     }
 }
 
-/// The row showing `favorite`: what it is and its name, and its music service and its description.
+/// The row showing `favorite`: what it is and its name, with a badge if it is explicit, and its music
+/// service and its description.
 fn favorite_row<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) -> Columns<'a> {
     let muted = Style::default().fg(theme.muted);
     let service = favorite
@@ -562,6 +563,9 @@ fn favorite_row<'a>(favorite: &'a Favorite, symbols: &Symbols, theme: &Theme) ->
         favorite.name.as_str(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
+    if favorite.resource.as_ref().is_some_and(|r| r.explicit) {
+        name_line.extend(explicit_badge(symbols, theme));
+    }
     Columns {
         cells: vec![Line::from(name_line), Line::from(details)],
         widths: &[Constraint::Fill(1), Constraint::Fill(1)],

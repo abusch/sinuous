@@ -1228,6 +1228,38 @@ mod tests {
     }
 
     #[test]
+    fn favorites_mark_explicit_ones() {
+        let mut state = household();
+        state.favorites = [("Summit", false), ("City Burials", true)]
+            .map(|(name, explicit)| {
+                serde_json::from_value(serde_json::json!({
+                    "_objectType": "favorite",
+                    "id": name.to_lowercase(),
+                    "name": name,
+                    "resource": {
+                        "_objectType": "favoriteResource",
+                        "type": "ALBUM",
+                        "explicit": explicit,
+                    },
+                }))
+                .unwrap()
+            })
+            .into();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('f')], &state, &mut ui);
+
+        let rows = screen_rows(&state, &mut ui, 120);
+        let row = |name| rows.iter().find(|row| row.contains(name)).unwrap();
+        assert!(
+            row("City Burials").contains("City Burials  E "),
+            "{}",
+            row("City Burials")
+        );
+        assert!(!row("Summit").contains(" E "), "{}", row("Summit"));
+    }
+
+    #[test]
     fn browser_tabs_show_the_history_the_favorites_and_the_playlists() {
         let mut state = household();
         state.history = vec![
