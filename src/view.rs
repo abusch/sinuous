@@ -53,6 +53,9 @@ const GROUP_PANEL_MAX_WIDTH: u16 = 48;
 #[derive(Debug, Default)]
 pub struct UiState {
     selected_group: Option<Selection>,
+    /// The speaker whose group to select when none is, e.g. the one selected last time the app
+    /// ran, until a group is.
+    preferred_speaker: Option<PlayerId>,
     mode: Mode,
     /// The last error that wasn't about the speakers.
     error: Option<ErrorMessage>,
@@ -123,6 +126,8 @@ pub enum Request {
     Toggle(UiSetting),
     /// Use the theme with this name, and save it.
     SetTheme(String),
+    /// Select the group of this speaker the next time the app starts.
+    RememberSpeaker(PlayerId),
     /// Exit the app.
     Quit,
 }
@@ -318,6 +323,14 @@ impl PanelHighlight {
 }
 
 impl UiState {
+    /// The state to start with, selecting the group of `speaker` if it is there, or the first one.
+    pub fn new(speaker: Option<PlayerId>) -> Self {
+        Self {
+            preferred_speaker: speaker,
+            ..Self::default()
+        }
+    }
+
     /// Keep the selection valid for the latest `state`, e.g. when the selected group is gone.
     pub fn sync(&mut self, state: &HouseholdState) {
         // When the selected group is gone, follow its coordinator to the group it is in now.
@@ -332,7 +345,14 @@ impl UiState {
                         .find(|g| g.player_ids.contains(&selected.coordinator))
                 })
             })
+            .or_else(|| {
+                let speaker = self.preferred_speaker.as_ref()?;
+                state.groups.iter().find(|g| g.player_ids.contains(speaker))
+            })
             .or_else(|| state.groups.first());
+        if selected.is_some() {
+            self.preferred_speaker = None;
+        }
         self.selected_group = selected.map(Selection::of);
 
         let current = self.current_group(state).map(|(_, group)| group);
@@ -705,6 +725,40 @@ mod tests {
         ];
         ui.sync(&state);
         assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + 1");
+    }
+
+    #[test]
+    fn starts_with_the_group_of_the_speaker_selected_last_time() {
+        let state = household();
+        // The office is in the bedroom's group now.
+        let mut ui = UiState::new(Some("o".into()));
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + 1");
+
+        let mut ui = UiState::new(Some("k".into()));
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Kitchen");
+
+        // It isn't there anymore.
+        let mut ui = UiState::new(Some("gone".into()));
+        ui.sync(&state);
+        assert_eq!(ui.current_group(&state).unwrap().1.name, "Bedroom + 1");
+    }
+
+    #[test]
+    fn selecting_a_group_remembers_its_coordinator() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('g'), KeyCode::Char('j')], &state, &mut ui);
+        let request = press(&[KeyCode::Enter], &state, &mut ui);
+        assert!(
+            matches!(&request, Some(Request::RememberSpeaker(id)) if id.as_str() == "k"),
+            "{request:?}"
+        );
+
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        assert!(press(&[KeyCode::Esc], &state, &mut ui).is_none());
     }
 
     #[test]

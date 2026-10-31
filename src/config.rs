@@ -154,7 +154,7 @@ pub fn save(path: &Path, key: &str, value: impl Into<Value>) -> Result<()> {
 
 /// Write `contents` to `path`, so that it has either its old or its new contents if writing fails
 /// half-way.
-fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+pub fn write_atomically(path: &Path, contents: &str) -> Result<()> {
     // Replace the file a symbolic link points to, e.g. in a dotfiles repository, not the link.
     let path = match fs::canonicalize(path) {
         Ok(target) => target,

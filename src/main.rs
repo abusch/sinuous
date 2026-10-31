@@ -9,6 +9,7 @@ use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 mod app;
 mod artwork;
 mod config;
+mod saved_state;
 mod sonos;
 mod spinner;
 mod symbols;
@@ -66,6 +67,7 @@ async fn main() -> Result<()> {
         household,
         config.ui,
         config_path.or_else(config::default_path),
+        saved_state::default_path(),
         artwork::disk_cache(config.core.album_art_cache_size),
     );
     // Initialize the terminal user interface.

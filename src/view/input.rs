@@ -63,8 +63,7 @@ pub fn handle_input(
     let command = match ui.mode {
         Mode::NowPlaying => handle_now_playing_input(input, state, ui),
         Mode::GroupPicker(highlight) => {
-            handle_group_picker_input(input, state, ui, highlight);
-            None
+            return handle_group_picker_input(input, state, ui, highlight);
         }
         Mode::GroupEditor(_) => handle_group_editor_input(input, state, ui),
         Mode::Browser(_) => handle_browser_input(input, state, ui),
@@ -228,26 +227,29 @@ fn handle_system_info_input(input: &KeyEvent, ui: &mut UiState, scroll: Scroll) 
 }
 
 /// Update `ui` according to the key pressed while the group picker is open, with the group at
-/// `highlight` highlighted.
+/// `highlight` highlighted, and return the speaker to remember if a group was selected.
 fn handle_group_picker_input(
     input: &KeyEvent,
     state: &HouseholdState,
     ui: &mut UiState,
     highlight: PanelHighlight,
-) {
+) -> Option<Request> {
     if let Some(item) = navigate(input.code, highlight.item, state.groups.len()) {
         ui.mode = Mode::GroupPicker(PanelHighlight { item, ..highlight });
-        return;
+        return None;
     }
     match input.code {
         KeyCode::Enter => {
-            if let Some(group) = state.groups.get(highlight.item) {
-                ui.selected_group = Some(Selection::of(group));
-            }
             ui.mode = Mode::NowPlaying;
+            let group = state.groups.get(highlight.item)?;
+            ui.selected_group = Some(Selection::of(group));
+            Some(Request::RememberSpeaker(group.coordinator_id.clone()))
         }
-        KeyCode::Esc | KeyCode::Char('g') => ui.mode = Mode::NowPlaying,
-        _ => {}
+        KeyCode::Esc | KeyCode::Char('g') => {
+            ui.mode = Mode::NowPlaying;
+            None
+        }
+        _ => None,
     }
 }
 

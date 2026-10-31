@@ -15,7 +15,10 @@ local network.
 - Play, pause and skip tracks, toggle shuffle, repeat and crossfade, and set a
   sleep timer
 - Adjust the volume of a group, or of each of its speakers
-- Group and ungroup speakers
+- Group and ungroup speakers. The group selected last is selected again on
+  startup: it is remembered in `~/.local/state/sinuous/state.toml` (or
+  `$XDG_STATE_HOME/sinuous/state.toml`, or `%APPDATA%\sinuous\state.toml` on
+  Windows)
 - Play your Sonos favorites and playlists, skip to any track of the queue, and
   play again what was played recently
 - Album art, drawn with the Kitty, iTerm2 or Sixel graphics protocols in

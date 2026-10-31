@@ -5,7 +5,7 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::TryStreamExt;
 use ratatui::DefaultTerminal;
 use ratatui_image::picker::{Picker, ProtocolType};
-use sinuous_client::Household;
+use sinuous_client::{Household, PlayerId};
 use tokio::{
     select,
     time::{self, MissedTickBehavior},
@@ -15,6 +15,7 @@ use tracing::{debug, warn};
 use crate::{
     artwork::{Artwork, DiskCache},
     config::{self, UiConfig, UiSetting},
+    saved_state::SavedState,
     sonos,
     theme::Theme,
     view::{self, Request, UiState},
@@ -28,6 +29,9 @@ pub struct App {
     ui_config: UiConfig,
     /// Where settings changed while running are saved, if known.
     config_path: Option<PathBuf>,
+    /// What is remembered for the next run, and where it is saved, if known.
+    saved_state: SavedState,
+    state_path: Option<PathBuf>,
     /// Where fetched album art is kept, if anywhere.
     disk_cache: Option<DiskCache>,
 }
@@ -37,12 +41,19 @@ impl App {
         household: Household,
         ui_config: UiConfig,
         config_path: Option<PathBuf>,
+        state_path: Option<PathBuf>,
         disk_cache: Option<DiskCache>,
     ) -> Self {
+        let saved_state = state_path
+            .as_deref()
+            .map(SavedState::load)
+            .unwrap_or_default();
         App {
             household,
             ui_config,
             config_path,
+            saved_state,
+            state_path,
             disk_cache,
         }
     }
@@ -64,7 +75,7 @@ impl App {
         };
         let (mut artwork, mut loaded_rx) = Artwork::new(picker, self.disk_cache.take());
 
-        let mut ui = UiState::default();
+        let mut ui = UiState::new(self.saved_state.speaker.clone());
         let mut theme = Theme::named(&self.ui_config.theme).unwrap_or_else(|| {
             let message = format!(
                 "Unknown theme `{}`: using the terminal's colours",
@@ -133,6 +144,7 @@ impl App {
                                     self.ui_config.theme = name;
                                 }
                             }
+                            Some(Request::RememberSpeaker(speaker)) => self.remember(speaker),
                             Some(Request::Quit) => break,
                             None => {}
                         }
@@ -158,6 +170,21 @@ impl App {
         let value = !self.ui_config.get(setting);
         self.ui_config.set(setting, value);
         self.save(setting.key(), value, ui);
+    }
+
+    /// Save `speaker` as the one whose group to select the next time the app starts.
+    fn remember(&mut self, speaker: PlayerId) {
+        if self.saved_state.speaker.as_ref() == Some(&speaker) {
+            return;
+        }
+        self.saved_state.speaker = Some(speaker);
+        let Some(path) = &self.state_path else {
+            return;
+        };
+        // It is only a convenience: don't bother the user if it can't be saved.
+        if let Err(err) = self.saved_state.save(path) {
+            warn!("Failed to save the state: {err:#}");
+        }
     }
 
     /// Set the `key` UI setting to `value` in the configuration file, showing why if it fails.
