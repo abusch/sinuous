@@ -475,7 +475,7 @@ mod tests {
         let screen = screen(&state, &mut ui, 80, 60).join("\n");
         for shown in [
             "Household     Sonos_1",
-            "Group         Bedroom + Office · coordinator",
+            "Group         Bedroom + 1 · coordinator",
             "Address       10.0.0.2",
             "Battery       15% (measured 12%) · not charging · 31.5 °C",
             "Wi-Fi         Home · excellent",
