@@ -520,4 +520,28 @@ mod tests {
         press(&[KeyCode::Down], &state, &mut ui);
         assert_eq!(screen(&state, &mut ui, 60, 12), at_end);
     }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_scroll_by_pages_like_page_down_and_page_up() {
+        use crossterm::event::{KeyEvent, KeyModifiers};
+
+        use crate::view::handle_input;
+
+        let state = state();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('i')], &state, &mut ui);
+        let top = screen(&state, &mut ui, 60, 12);
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+
+        press(&[KeyCode::PageDown], &state, &mut ui);
+        let page_down = screen(&state, &mut ui, 60, 12);
+        assert_ne!(page_down, top);
+        press(&[KeyCode::Home], &state, &mut ui);
+        handle_input(&ctrl('d'), &state, &UiConfig::default(), &mut ui);
+        assert_eq!(screen(&state, &mut ui, 60, 12), page_down);
+
+        handle_input(&ctrl('u'), &state, &UiConfig::default(), &mut ui);
+        assert_eq!(screen(&state, &mut ui, 60, 12), top);
+    }
 }
