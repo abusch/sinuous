@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/abusch/sinuous/compare/v0.3.0...v0.4.0) - 2026-10-31
+
+### Added
+
+- Select the speaker that was selected last time on startup
+- Mark explicit favorites
+- Show explicit tracks with an icon when using a Nerd Font
+- Mark the tracks that are explicit, in the queue too
+- Name groups after their coordinator and how many other speakers they have
+- Scroll the system info by pages with ctrl+D and ctrl+U
+- Show the keys to use in a footer bar, depending on what is open
+- Show the name of the group with what it is playing, instead of in the header
+- Show the browser full-width, with what is playing in a bar below it
+
+### Fixed
+
+- Keep the footer visible and its shortcuts accurate
+
+### Other
+
+- *(deps)* bump tokio from 1.53.3 to 1.54.1
+- Publish releases to the AUR
+- Publish releases to the Homebrew tap
+
 ## [0.3.0](https://github.com/abusch/sinuous/compare/v0.2.0...v0.3.0) - 2026-10-19
 
 ### Added
