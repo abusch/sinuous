@@ -1,8 +1,7 @@
 //! What key presses do.
 
 use std::collections::HashSet;
-
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use sinuous_client::{
@@ -14,6 +13,7 @@ use crate::config::{UiConfig, UiSetting};
 use crate::sonos::{Command, GroupAction, GroupState, HouseholdState, PlayerAction};
 use crate::theme::THEMES;
 
+use super::seek::PendingSeek;
 use super::{
     Browser, GroupEditor, Mode, PanelHighlight, PlaybackItem, Request, SLEEP_TIMER_MINUTES, Scroll,
     Selection, Tab, UiState,
@@ -126,6 +126,21 @@ pub fn handle_input(
             theme_picker: Some(theme),
         } => return handle_theme_picker_input(input, ui, highlighted, theme),
     };
+    // The position the last seek goes to means nothing in another track.
+    if let Some(Command::Group { group, action }) = &command
+        && matches!(
+            action,
+            GroupAction::Next
+                | GroupAction::Previous
+                | GroupAction::SkipToTrack(_)
+                | GroupAction::LoadFavorite(_)
+                | GroupAction::LoadPlaylist(_)
+                | GroupAction::LoadContent(..)
+        )
+        && ui.seek.as_ref().is_some_and(|seek| seek.is_in(group))
+    {
+        ui.seek = None;
+    }
     command.map(Request::Speakers)
 }
 
@@ -160,6 +175,7 @@ fn handle_now_playing_input(
             theme_picker: None,
         },
 
+        KeyCode::Char(key @ ('<' | '>')) => return seek(state, ui, key == '>'),
         _ => return group_command(input, state, ui),
     };
     None
@@ -585,6 +601,22 @@ fn group_command(input: &KeyEvent, state: &HouseholdState, ui: &UiState) -> Opti
     command_for(group, action)
 }
 
+/// The command seeking [`SEEK_STEP`](super::seek::SEEK_STEP) `forward`, or back, in what the
+/// selected group plays, from where the last seek goes while the speakers are getting there.
+fn seek(state: &HouseholdState, ui: &mut UiState, forward: bool) -> Option<Command> {
+    let (_, group) = ui.current_group(state)?;
+    if !supports(group, Action::Seek) {
+        return None;
+    }
+    let seek = PendingSeek::step(ui.seek.as_ref(), group, forward, Instant::now())?;
+    let command = Command::Group {
+        group: group.id.clone(),
+        action: GroupAction::Seek(seek.target()),
+    };
+    ui.seek = Some(seek);
+    Some(command)
+}
+
 /// The command doing `action` for `group`, unless its source doesn't support what it requires.
 fn command_for(
     group: &GroupState,
@@ -605,6 +637,7 @@ pub(super) enum Action {
     PlayPause,
     Next,
     Previous,
+    Seek,
     Shuffle,
     Repeat,
     Crossfade,
@@ -623,6 +656,7 @@ pub(super) fn supports(group: &GroupState, action: Action) -> bool {
         Action::PlayPause => actions.can_play,
         Action::Next => actions.can_skip,
         Action::Previous => actions.can_skip_back || actions.can_skip_to_previous,
+        Action::Seek => actions.can_seek,
         Action::Shuffle => actions.can_shuffle,
         Action::Repeat => actions.can_repeat || actions.can_repeat_one,
         Action::Crossfade => actions.can_crossfade,
@@ -758,6 +792,55 @@ mod tests {
             seen.push((modes.repeat, modes.repeat_one));
         }
         seen
+    }
+
+    #[test]
+    fn seeks_go_further_from_where_the_last_one_goes() {
+        let mut state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let seek = |state: &HouseholdState, ui: &mut UiState, key| match press(
+            &[KeyCode::Char(key)],
+            state,
+            ui,
+        ) {
+            Some(Request::Speakers(Command::Group {
+                action: GroupAction::Seek(position),
+                ..
+            })) => Some(position.as_secs()),
+            None => None,
+            request => panic!("Unexpected request: {request:?}"),
+        };
+        let seekable = PlaybackActions {
+            can_seek: true,
+            can_skip: true,
+            ..Default::default()
+        };
+        let paused_at = |secs, actions| {
+            Some(Playback::at(
+                PlaybackState::Paused,
+                Duration::from_secs(secs),
+                actions,
+            ))
+        };
+
+        // Each press goes further from where the last one goes, until the speakers get there.
+        state.groups[0].playback = paused_at(60, seekable);
+        assert_eq!(seek(&state, &mut ui, '>'), Some(70));
+        assert_eq!(seek(&state, &mut ui, '>'), Some(80));
+        assert_eq!(seek(&state, &mut ui, '<'), Some(70));
+        state.groups[0].playback = paused_at(70, seekable);
+        ui.sync(&state);
+        assert_eq!(seek(&state, &mut ui, '<'), Some(60));
+        // Skipping to another track forgets where the last seek goes.
+        press(&[KeyCode::Char('n')], &state, &mut ui);
+        assert_eq!(seek(&state, &mut ui, '<'), Some(60));
+
+        // Nothing happens when the source doesn't support seeking.
+        state.groups[0].playback = paused_at(60, PlaybackActions::default());
+        ui.seek = None;
+        assert_eq!(seek(&state, &mut ui, '>'), None);
+        assert_eq!(seek(&state, &mut ui, '<'), None);
     }
 
     #[test]

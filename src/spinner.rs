@@ -1,4 +1,5 @@
-//! A spinner shown in the terminal while waiting, before the user interface takes it over.
+//! A spinner shown in the terminal while waiting, before the user interface takes it over, and
+//! the frames of the one it shows while speakers buffer.
 
 use std::io::{self, IsTerminal};
 use std::time::Duration;
@@ -14,7 +15,7 @@ use tokio::{
     time::{self, MissedTickBehavior},
 };
 
-const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+pub const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const FRAME_INTERVAL: Duration = Duration::from_millis(80);
 
 /// Show `message` next to a spinner until `future` completes, then erase it.

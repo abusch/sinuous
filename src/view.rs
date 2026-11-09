@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use clap::crate_version;
 use ratatui::{
@@ -11,6 +14,7 @@ use ratatui::{
 use sinuous_client::{
     GroupId, PlayerId,
     history::{ContentType, HistoryItem},
+    playback::PlaybackState,
 };
 use url::Url;
 
@@ -27,6 +31,7 @@ mod input;
 mod now_playing;
 mod panel;
 mod popup;
+mod seek;
 mod system_info;
 
 use footer::render_footer;
@@ -39,6 +44,7 @@ use popup::{
     render_config_dialog, render_help, render_playback_menu, render_sleep_timer_picker,
     render_theme_picker, render_volume_mixer,
 };
+use seek::PendingSeek;
 use system_info::render_system_info;
 
 /// How long errors are displayed for.
@@ -59,6 +65,8 @@ pub struct UiState {
     mode: Mode,
     /// The last error that wasn't about the speakers.
     error: Option<ErrorMessage>,
+    /// The last seek sent, while the speakers are getting there.
+    seek: Option<PendingSeek>,
 }
 
 /// What is open beside, or on top of, what the selected group is playing.
@@ -436,6 +444,13 @@ impl UiState {
             self.preferred_speaker = None;
         }
         self.selected_group = selected.map(Selection::of);
+        if self
+            .seek
+            .as_ref()
+            .is_some_and(|seek| !seek.is_pending(state, Instant::now()))
+        {
+            self.seek = None;
+        }
 
         let current = self.current_group(state).map(|(_, group)| group);
         let mixer_rows = current.map(|group| state.members(group).count() + 1);
@@ -554,8 +569,14 @@ pub fn is_animated(state: &HouseholdState, ui: &UiState) -> bool {
     let advancing = group
         .and_then(|group| group.playback)
         .is_some_and(|playback| playback.is_advancing());
+    // The spinner shown in place of the playback status turns.
+    let buffering = group
+        .and_then(|group| group.playback)
+        .is_some_and(|playback| playback.state == PlaybackState::Buffering);
     let counting_down = group.is_some_and(|group| group.sleep_timer.is_some());
-    showing_error || advancing || counting_down
+    // Until the seek times out, if the speakers don't report getting there before.
+    let seeking = ui.seek.is_some();
+    showing_error || advancing || counting_down || seeking || buffering
 }
 
 pub fn render_ui(
@@ -578,6 +599,7 @@ pub fn render_ui(
     ])
     .areas(frame.area());
 
+    let seeking_to = ui.seek.as_ref().and_then(|seek| seek.target_in(group));
     render_title_bar(state, ui, theme, frame, title);
     render_footer(state, ui, group, theme, frame, footer);
     if let Mode::SystemInfo(scroll) = &mut ui.mode {
@@ -589,7 +611,7 @@ pub fn render_ui(
             Layout::vertical([Constraint::Fill(1), Constraint::Length(PLAYER_BAR_HEIGHT)])
                 .areas(body);
         render_browser(state, group, symbols, theme, browser, frame, panel);
-        return render_player_bar(group, symbols, theme, frame, player);
+        return render_player_bar(group, seeking_to, symbols, theme, frame, player);
     }
 
     let now_playing = match ui.mode {
@@ -621,7 +643,9 @@ pub fn render_ui(
             (true, true) => AlbumArt::Placeholder,
             (true, false) => AlbumArt::Shown,
         };
-        render_now_playing(group, symbols, theme, frame, area, artwork, album_art);
+        render_now_playing(
+            group, seeking_to, symbols, theme, frame, area, artwork, album_art,
+        );
     }
 
     // Popups, on top of everything else but the title bar and the footer, which shows the keys to
@@ -1526,9 +1550,12 @@ mod tests {
         ));
         let mut ui = UiState::default();
         ui.sync(&state);
+        assert!(is_animated(&state, &ui));
         let rows = screen_rows(&state, &mut ui, 120);
-        assert!(rows.iter().any(|row| row.contains("Buffering…")));
-        assert!(!rows.iter().any(|row| row.contains("0:00")));
+        // A spinner takes the place of the playback status, and the progress bar stays.
+        let spinning = |row: &String| crate::spinner::FRAMES.iter().any(|f| row.contains(f));
+        assert!(rows.iter().any(spinning));
+        assert!(!rows.iter().any(|row| row.contains("⏵")));
         press(&[KeyCode::Char('g')], &state, &mut ui);
         let rows = screen_rows(&state, &mut ui, 120);
         assert!(rows.iter().any(|row| row.contains("⏵ Buffering")));
