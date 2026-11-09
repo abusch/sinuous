@@ -50,21 +50,23 @@ pub(super) fn render_group_panel(
         area,
         Line::from(" Groups "),
         None,
+        None,
         GROUP_HEIGHT,
         items,
         highlight,
     );
 }
 
-/// A panel titled `title` in `area`, listing `items` of `item_height` lines, a line apart if they
-/// take several, scrolled so that the one at `highlight` is shown, and highlighted, with `note`
-/// above the items, if any.
+/// A panel titled `title` in `area`, with `bottom_title` at the bottom, if any, listing `items` of
+/// `item_height` lines, a line apart if they take several, scrolled so that the one at `highlight`
+/// is shown, and highlighted, with `note` above the items, if any.
 #[expect(clippy::too_many_arguments)]
 fn render_panel(
     frame: &mut Frame,
     theme: &Theme,
     area: Rect,
     title: Line,
+    bottom_title: Option<Line>,
     note: Option<Line>,
     item_height: u16,
     items: Vec<impl Widget>,
@@ -77,6 +79,10 @@ fn render_panel(
         // Off the border on the right too, as the items are after the bar on the left
         .padding(Padding::new(0, 1, 1, 1))
         .title_top(title);
+    let block = match bottom_title {
+        Some(bottom_title) => block.title_bottom(bottom_title),
+        None => block,
+    };
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
     if let Some(note) = note {
@@ -247,6 +253,7 @@ pub(super) fn render_group_editor(
         area,
         Line::from(" Group speakers "),
         None,
+        None,
         2,
         items,
         &mut editor.highlight,
@@ -343,6 +350,7 @@ pub(super) fn render_browser(
     tabs.push(Span::raw(" "));
     let title = Line::from(tabs);
 
+    let shown = browser.shown(state, group);
     let (note, items) = match browser.tab {
         Tab::Queue => {
             let queue = GroupQueue::of(state.queue.as_ref(), &group.id);
@@ -354,10 +362,9 @@ pub(super) fn render_browser(
                 }
                 QueueContents::Loaded(queue) => {
                     let current = group.queue_position.filter(|_| group.plays_from(queue));
-                    let items = queue
-                        .items
+                    let items = shown
                         .iter()
-                        .map(|entry| queue_entry_row(entry, current, symbols, theme))
+                        .map(|&i| queue_entry_row(&queue.items[i], current, symbols, theme))
                         .collect();
                     // The queue keeps what was last played from it.
                     let note = current.is_none().then_some("Not playing from the queue");
@@ -367,41 +374,68 @@ pub(super) fn render_browser(
             (note, items)
         }
         Tab::History => {
-            let items: Vec<_> = state
-                .history
+            let items: Vec<_> = shown
                 .iter()
-                .map(|item| Columns {
-                    cells: vec![history_line(item, symbols, theme)],
+                .map(|&i| Columns {
+                    cells: vec![history_line(&state.history[i], symbols, theme)],
                     widths: &[Constraint::Fill(1)],
                 })
                 .collect();
-            let note = items.is_empty().then_some("Nothing played recently");
+            let note = state
+                .history
+                .is_empty()
+                .then_some("Nothing played recently");
             (note, items)
         }
         Tab::Favorites => {
-            let items: Vec<_> = state
-                .favorites
+            let items: Vec<_> = shown
                 .iter()
-                .map(|favorite| favorite_row(favorite, symbols, theme))
+                .map(|&i| favorite_row(&state.favorites[i], symbols, theme))
                 .collect();
-            let note = items.is_empty().then_some("No favorites");
+            let note = state.favorites.is_empty().then_some("No favorites");
             (note, items)
         }
         Tab::Playlists => {
-            let items: Vec<_> = state
-                .playlists
+            let items: Vec<_> = shown
                 .iter()
-                .map(|playlist| playlist_row(playlist, theme))
+                .map(|&i| playlist_row(&state.playlists[i], theme))
                 .collect();
-            let note = items.is_empty().then_some("No playlists");
+            let note = state.playlists.is_empty().then_some("No playlists");
             (note, items)
         }
     };
+    // Saying when nothing matches the filter, rather than anything else, unless there is nothing
+    // to filter
+    let nothing_matches = browser.filter.is_some()
+        && items.is_empty()
+        && !browser.tab.matching(state, group, &[]).is_empty();
+    let note = if nothing_matches {
+        Some("No matches")
+    } else {
+        note
+    };
+    let filter = browser.filter.as_ref().map(|filter| {
+        let mut spans = vec![
+            Span::raw(" "),
+            Span::styled("/", Style::default().fg(theme.key)),
+            Span::raw(filter.text.as_str()),
+        ];
+        if filter.editing {
+            // The cursor
+            spans.push(Span::styled(
+                " ",
+                Style::default().add_modifier(Modifier::REVERSED),
+            ));
+        }
+        spans.push(Span::raw(" "));
+        Line::from(spans)
+    });
     render_panel(
         frame,
         theme,
         area,
         title,
+        filter,
         note.map(|note| Line::styled(note, muted)),
         1,
         items,
