@@ -424,6 +424,21 @@ pub enum GroupAction {
     SetSleepTimer(Option<Duration>),
 }
 
+impl GroupAction {
+    /// Whether it moves the group to another track, or to something else to play.
+    pub fn changes_track(&self) -> bool {
+        matches!(
+            self,
+            Self::Next
+                | Self::Previous
+                | Self::SkipToTrack(_)
+                | Self::LoadFavorite(_)
+                | Self::LoadPlaylist(_)
+                | Self::LoadContent(..)
+        )
+    }
+}
+
 #[derive(Debug)]
 pub enum PlayerAction {
     AdjustVolume(i8),

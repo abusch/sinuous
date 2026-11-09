@@ -60,13 +60,8 @@ impl PendingSeek {
     }
 
     /// Where `group` is seeking to, if this seek is in it.
-    pub(super) fn target_in(&self, group: &GroupState) -> Option<Duration> {
-        (self.group == group.id).then_some(self.target)
-    }
-
-    /// Whether this seek is in `group`.
-    pub(super) fn is_in(&self, group: &GroupId) -> bool {
-        self.group == *group
+    pub(super) fn target_in(&self, group: &GroupId) -> Option<Duration> {
+        (self.group == *group).then_some(self.target)
     }
 
     /// Whether the speakers are still to report getting where the seek goes, in `state` at `now`.

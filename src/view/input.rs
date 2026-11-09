@@ -65,6 +65,13 @@ fn navigate_panel(
         (KeyCode::PageDown, _) => highlight.item.saturating_add(page).min(last),
         (KeyCode::Home, _) => 0,
         (KeyCode::End, _) => last,
+        // Other letters with ctrl or alt don't move the highlight, e.g. alt+J while typing the
+        // filter of the browser.
+        (KeyCode::Char(_), modifiers)
+            if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            return None;
+        }
         (key, _) => navigate(key, highlight.item, len)?,
     };
     Some(PanelHighlight { item, ..highlight })
@@ -128,18 +135,9 @@ pub fn handle_input(
     };
     // The position the last seek goes to means nothing in another track.
     if let Some(Command::Group { group, action }) = &command
-        && matches!(
-            action,
-            GroupAction::Next
-                | GroupAction::Previous
-                | GroupAction::SkipToTrack(_)
-                | GroupAction::LoadFavorite(_)
-                | GroupAction::LoadPlaylist(_)
-                | GroupAction::LoadContent(..)
-        )
-        && ui.seek.as_ref().is_some_and(|seek| seek.is_in(group))
+        && action.changes_track()
     {
-        ui.seek = None;
+        ui.seek.take_if(|seek| seek.target_in(group).is_some());
     }
     command.map(Request::Speakers)
 }
@@ -1136,6 +1134,11 @@ mod tests {
         };
         let highlight = navigate_panel(&ctrl('d'), highlight, 3).unwrap();
         assert_eq!((highlight.item, highlight.first), (2, 0));
+
+        // j and k move the highlight only on their own.
+        let alt = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT);
+        assert!(navigate_panel(&ctrl('k'), highlight, 3).is_none());
+        assert!(navigate_panel(&alt, highlight, 3).is_none());
     }
 
     /// The keys typing `text`.

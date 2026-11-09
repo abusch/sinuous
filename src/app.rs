@@ -23,7 +23,7 @@ use crate::{
 
 /// How often to redraw while what is displayed changes over time, e.g. the playback position. The
 /// buffering spinner turns one frame each time.
-const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
+pub(crate) const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct App {
     household: Household,
