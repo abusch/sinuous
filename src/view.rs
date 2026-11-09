@@ -220,16 +220,33 @@ impl Tab {
             .cast_unsigned()]
     }
 
-    /// How many items it lists for `group`.
-    fn len(self, state: &HouseholdState, group: &GroupState) -> usize {
+    /// The indices of the items it lists for `group` that contain each of `words`, which are in
+    /// lowercase, whatever their case: all of them when there are no words.
+    fn matching(self, state: &HouseholdState, group: &GroupState, words: &[String]) -> Vec<usize> {
         match self {
             Self::Queue => match GroupQueue::of(state.queue.as_ref(), &group.id) {
-                QueueContents::Loaded(queue) => queue.items.len(),
-                QueueContents::Loading | QueueContents::Failed => 0,
+                QueueContents::Loaded(queue) => matching(&queue.items, words, |entry| {
+                    [&entry.name, &entry.artist, &entry.album]
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str)
+                }),
+                QueueContents::Loading | QueueContents::Failed => Vec::new(),
             },
-            Self::History => state.history.len(),
-            Self::Favorites => state.favorites.len(),
-            Self::Playlists => state.playlists.len(),
+            Self::History => matching(&state.history, words, |item| [item.name.as_str()]),
+            Self::Favorites => matching(&state.favorites, words, |favorite| {
+                let service = favorite.service.as_ref().map(|s| s.name.as_str());
+                [
+                    Some(favorite.name.as_str()),
+                    favorite.description.as_deref(),
+                    service,
+                ]
+                .into_iter()
+                .flatten()
+            }),
+            Self::Playlists => {
+                matching(&state.playlists, words, |playlist| [playlist.name.as_str()])
+            }
         }
     }
 
@@ -259,6 +276,28 @@ impl Tab {
     }
 }
 
+/// The indices of `items` with `fields` that contain each of `words`, which are in lowercase,
+/// whatever their case, each word in any of them.
+fn matching<'a, T, F>(items: &'a [T], words: &[String], fields: impl Fn(&'a T) -> F) -> Vec<usize>
+where
+    F: IntoIterator<Item = &'a str>,
+{
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            if words.is_empty() {
+                return true;
+            }
+            let fields: Vec<_> = fields(item).into_iter().map(str::to_lowercase).collect();
+            words
+                .iter()
+                .all(|word| fields.iter().any(|field| field.contains(word.as_str())))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Whether `item` of the history can be played again.
 fn can_play_again(item: &HistoryItem) -> bool {
     // What the type of the content is needs to be given to play it.
@@ -272,6 +311,8 @@ struct Browser {
     highlight: PanelHighlight,
     /// Whether to highlight the current track once the queue is read.
     find_current: bool,
+    /// The text that the items listed must contain, if any.
+    filter: Option<Filter>,
 }
 
 impl Browser {
@@ -281,7 +322,48 @@ impl Browser {
             tab,
             highlight: PanelHighlight::new(0),
             find_current: tab == Tab::Queue,
+            filter: None,
         }
+    }
+
+    /// The indices of the items of the tab that are listed for `group`: those matching the
+    /// filter, if any.
+    fn shown(&self, state: &HouseholdState, group: &GroupState) -> Vec<usize> {
+        let words = self.filter.as_ref().map(Filter::words).unwrap_or_default();
+        self.tab.matching(state, group, &words)
+    }
+
+    /// The index of the highlighted item among all the items of the tab, if there is one.
+    fn highlighted(&self, state: &HouseholdState, group: &GroupState) -> Option<usize> {
+        self.shown(state, group).get(self.highlight.item).copied()
+    }
+
+    /// What playing the highlighted item in `group` does, if it can be played.
+    fn play(&self, state: &HouseholdState, group: &GroupState) -> Option<GroupAction> {
+        self.tab.play(self.highlighted(state, group)?, state, group)
+    }
+
+    /// Whether the filter is being typed.
+    fn typing_filter(&self) -> bool {
+        self.filter.as_ref().is_some_and(|filter| filter.editing)
+    }
+}
+
+/// Text to look for in what the browser lists.
+#[derive(Debug, Default)]
+struct Filter {
+    text: String,
+    /// Whether it is being typed.
+    editing: bool,
+}
+
+impl Filter {
+    /// The words that the items listed must contain, in lowercase.
+    fn words(&self) -> Vec<String> {
+        self.text
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect()
     }
 }
 
@@ -374,18 +456,19 @@ impl UiState {
                         GroupQueue::of(state.queue.as_ref(), &group.id)
                 {
                     browser.find_current = false;
+                    let shown = browser.shown(state, group);
                     let current = group
                         .queue_position
                         .filter(|_| group.plays_from(queue))
                         .and_then(|position| {
-                            queue
-                                .items
+                            shown
                                 .iter()
-                                .position(|item| item.position == position)
+                                .position(|&i| queue.items[i].position == position)
                         });
                     browser.highlight = PanelHighlight::new(current.unwrap_or(0));
                 }
-                clamp(&mut browser.highlight.item, browser.tab.len(state, group));
+                let len = browser.shown(state, group).len();
+                clamp(&mut browser.highlight.item, len);
             }
             Mode::PlaybackMenu { highlighted, .. } => clamp(highlighted, PlaybackItem::ALL.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
@@ -1362,6 +1445,44 @@ mod tests {
             rows.iter()
                 .any(|row| row.contains("12 tracks") && !row.contains("Playlist"))
         );
+    }
+
+    #[test]
+    fn browser_shows_its_filter_and_what_matches_it() {
+        let mut state = household_with_queue();
+        state.groups[0].queue_version = Some("4".to_owned());
+        state.groups[0].queue_position = Some(2);
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        press(&[KeyCode::Char('l')], &state, &mut ui);
+        ui.sync(&state);
+
+        let keys: Vec<_> = "/asc".chars().map(KeyCode::Char).collect();
+        press(&keys, &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("▌ Ascension")));
+        assert!(!rows.iter().any(|row| row.contains("Escape")));
+        assert!(
+            rows.iter().any(|row| row.contains("╰ /asc  ─")),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.last()
+                .unwrap()
+                .starts_with(" ↑↓ navigate • ENTER done")
+        );
+
+        // Nothing matches, which is said rather than that the group doesn't play from the queue.
+        press(&[KeyCode::Char('x')], &state, &mut ui);
+        state.groups[0].queue_version = Some("5".to_owned());
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("No matches")));
+        assert!(!rows.iter().any(|row| row.contains("Not playing from")));
+
+        press(&[KeyCode::Backspace, KeyCode::Enter], &state, &mut ui);
+        let rows = screen_rows(&state, &mut ui, 120);
+        assert!(rows.iter().any(|row| row.contains("╰ /asc ─")), "{rows:#?}");
+        assert!(rows.last().unwrap().contains("ESC clear filter"));
     }
 
     #[test]

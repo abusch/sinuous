@@ -53,6 +53,13 @@ pub fn handle_input(
     settings: &UiConfig,
     ui: &mut UiState,
 ) -> Option<Request> {
+    // While typing the filter of the browser, keys are mostly text.
+    if let Mode::Browser(browser) = &ui.mode
+        && browser.typing_filter()
+    {
+        handle_filter_input(input, state, ui);
+        return None;
+    }
     // q quits from the main screen, and closes what is open otherwise, like ESC.
     let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
     let input = match input.code {
@@ -442,7 +449,7 @@ fn handle_browser_input(
     let Mode::Browser(browser) = &mut ui.mode else {
         return None;
     };
-    let len = browser.tab.len(state, group);
+    let len = browser.shown(state, group).len();
     if let Some(item) = navigate_panel(input.code, browser.highlight, len) {
         browser.highlight.item = item;
         return None;
@@ -450,23 +457,80 @@ fn handle_browser_input(
     match input.code {
         KeyCode::Tab | KeyCode::Right => *browser = Browser::new(browser.tab.cycle(1)),
         KeyCode::BackTab | KeyCode::Left => *browser = Browser::new(browser.tab.cycle(-1)),
+        // Typing the filter again, from where it was left
+        KeyCode::Char('/') => browser.filter.get_or_insert_default().editing = true,
         // The key opening a tab switches to it, or closes the browser from it.
         KeyCode::Char(key) if key == browser.tab.key() => ui.mode = Mode::NowPlaying,
         KeyCode::Char(key) if let Some(tab) = Tab::ALL.into_iter().find(|t| t.key() == key) => {
             *browser = Browser::new(tab);
         }
         KeyCode::Enter => {
-            let action = browser.tab.play(browser.highlight.item, state, group)?;
+            let action = browser.play(state, group)?;
             ui.mode = Mode::NowPlaying;
             return Some(Command::Group {
                 group: group.id.clone(),
                 action,
             });
         }
+        KeyCode::Esc if browser.filter.is_some() => clear_filter(browser, state, group),
         KeyCode::Esc => ui.mode = Mode::NowPlaying,
         _ => {}
     }
     None
+}
+
+/// Update `ui` according to the key pressed while typing the filter of the browser.
+fn handle_filter_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiState) {
+    let Some((_, group)) = ui.current_group(state) else {
+        return;
+    };
+    let Mode::Browser(browser) = &mut ui.mode else {
+        return;
+    };
+    let Some(filter) = browser.filter.as_mut() else {
+        return;
+    };
+    match input.code {
+        KeyCode::Char(c)
+            if !input
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            filter.text.push(c);
+            browser.highlight = PanelHighlight::new(0);
+        }
+        KeyCode::Backspace => {
+            // Deleting past the start stops filtering.
+            if filter.text.pop().is_none() {
+                browser.filter = None;
+            }
+            browser.highlight = PanelHighlight::new(0);
+        }
+        KeyCode::Enter if filter.text.trim().is_empty() => browser.filter = None,
+        KeyCode::Enter => filter.editing = false,
+        KeyCode::Esc => clear_filter(browser, state, group),
+        // j and k are text here, but the arrows still move the highlight.
+        KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::PageUp
+        | KeyCode::PageDown
+        | KeyCode::Home
+        | KeyCode::End => {
+            let len = browser.shown(state, group).len();
+            if let Some(item) = navigate_panel(input.code, browser.highlight, len) {
+                browser.highlight.item = item;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Stop filtering what `browser` lists, keeping the item highlighted, if any, highlighted among
+/// all of them.
+fn clear_filter(browser: &mut Browser, state: &HouseholdState, group: &GroupState) {
+    let highlighted = browser.highlighted(state, group);
+    browser.filter = None;
+    browser.highlight = PanelHighlight::new(highlighted.unwrap_or(0));
 }
 
 /// The command for the selected group corresponding to the key pressed, if any.
@@ -930,6 +994,102 @@ mod tests {
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(favorite, "evening".into());
         assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    /// The keys typing `text`.
+    fn typing(text: &str) -> Vec<KeyCode> {
+        text.chars().map(KeyCode::Char).collect()
+    }
+
+    #[test]
+    fn browser_filters_what_it_lists() {
+        let mut state = household();
+        state.favorites = [
+            ("Morning jazz", None),
+            ("Quiet evening", Some("Calm piano")),
+            ("Jazz piano", Some("Late night")),
+        ]
+        .map(|(name, description)| {
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "favorite",
+                "id": name.to_lowercase(),
+                "name": name,
+                "description": description,
+            }))
+            .unwrap()
+        })
+        .into();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let shown = |ui: &UiState| match &ui.mode {
+            Mode::Browser(browser) => {
+                let group = &state.groups[0];
+                let shown = browser.shown(&state, group);
+                let names = shown.iter().map(|&i| state.favorites[i].name.as_str());
+                (names.collect::<Vec<_>>(), browser.highlight.item)
+            }
+            mode => panic!("{mode:?}"),
+        };
+
+        // Each word in any field, whatever the case; q and j are typed, not keys.
+        press(&[KeyCode::Char('f'), KeyCode::Char('/')], &state, &mut ui);
+        press(&typing("PIANO q"), &state, &mut ui);
+        assert_eq!(shown(&ui).0, ["Quiet evening"]);
+        press(&[KeyCode::Backspace, KeyCode::Backspace], &state, &mut ui);
+        assert_eq!(shown(&ui), (vec!["Quiet evening", "Jazz piano"], 0));
+        press(&[KeyCode::Down, KeyCode::Char('j')], &state, &mut ui);
+        assert_eq!(shown(&ui).0, Vec::<&str>::new());
+        press(&[KeyCode::Backspace, KeyCode::Down], &state, &mut ui);
+        assert_eq!(shown(&ui).1, 1);
+
+        // Done typing: the keys do what they usually do, and ENTER plays what is highlighted.
+        press(
+            &[KeyCode::Enter, KeyCode::Up, KeyCode::Char('j')],
+            &state,
+            &mut ui,
+        );
+        assert_eq!(shown(&ui), (vec!["Quiet evening", "Jazz piano"], 1));
+        let request = press(&[KeyCode::Enter], &state, &mut ui);
+        assert!(
+            matches!(
+                &request,
+                Some(Request::Speakers(Command::Group {
+                    action: GroupAction::LoadFavorite(id),
+                    ..
+                })) if *id == "jazz piano".into()
+            ),
+            "{request:?}"
+        );
+
+        // ESC stops filtering, keeping what was highlighted highlighted, then closes the browser.
+        press(&[KeyCode::Char('f'), KeyCode::Char('/')], &state, &mut ui);
+        press(&typing("jazz"), &state, &mut ui);
+        press(&[KeyCode::End, KeyCode::Enter], &state, &mut ui);
+        press(&[KeyCode::Esc], &state, &mut ui);
+        assert_eq!(shown(&ui).1, 2);
+        assert_eq!(shown(&ui).0.len(), 3);
+        press(&[KeyCode::Esc], &state, &mut ui);
+        assert!(matches!(ui.mode, Mode::NowPlaying));
+
+        // Deleting past the start stops filtering too, as does switching tabs.
+        press(&[KeyCode::Char('f'), KeyCode::Char('/')], &state, &mut ui);
+        press(&[KeyCode::Char('z'), KeyCode::Backspace], &state, &mut ui);
+        assert!(matches!(&ui.mode, Mode::Browser(b) if b.typing_filter()));
+        press(&[KeyCode::Backspace], &state, &mut ui);
+        assert!(matches!(&ui.mode, Mode::Browser(b) if b.filter.is_none()));
+        press(
+            &[
+                KeyCode::Char('/'),
+                KeyCode::Char('z'),
+                KeyCode::Enter,
+                KeyCode::Tab,
+            ],
+            &state,
+            &mut ui,
+        );
+        assert!(
+            matches!(&ui.mode, Mode::Browser(b) if b.filter.is_none() && b.tab == Tab::Playlists)
+        );
     }
 
     /// The action of the command sent when pressing `keys`, if any.

@@ -94,8 +94,10 @@ sinuous --device "Living Room"
 The bar at the bottom of the screen shows the keys to use in what is open. In
 the panel with the queue, the history, the favorites and the playlists,
 <kbd>Tab</kbd> switches between them, and <kbd>Enter</kbd> plays what is
-highlighted. Tracks of the queue can only be skipped to while the group plays
-from its queue.
+highlighted. <kbd>/</kbd> filters what is listed, as you type: only what
+contains each of the words typed is shown, whatever their case, e.g. the title,
+artist or album of a track. <kbd>Esc</kbd> shows everything again. Tracks of the
+queue can only be skipped to while the group plays from its queue.
 
 ## Configuration
 

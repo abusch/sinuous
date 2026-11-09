@@ -37,11 +37,33 @@ const BROWSER: &[Shortcut] = &[
     ("TAB", "switch"),
     ("↑↓", "navigate"),
     ("ENTER", "play"),
+    ("/", "filter"),
     ("ESC", "close"),
 ];
 /// In the browser, when the item highlighted can't be played, e.g. on the queue tab while the
 /// group doesn't play from its queue.
-const BROWSER_VIEW: &[Shortcut] = &[("TAB", "switch"), ("↑↓", "navigate"), ("ESC", "close")];
+const BROWSER_VIEW: &[Shortcut] = &[
+    ("TAB", "switch"),
+    ("↑↓", "navigate"),
+    ("/", "filter"),
+    ("ESC", "close"),
+];
+/// In the browser, while what it lists is filtered.
+const BROWSER_FILTERED: &[Shortcut] = &[
+    ("TAB", "switch"),
+    ("↑↓", "navigate"),
+    ("ENTER", "play"),
+    ("/", "edit filter"),
+    ("ESC", "clear filter"),
+];
+const BROWSER_FILTERED_VIEW: &[Shortcut] = &[
+    ("TAB", "switch"),
+    ("↑↓", "navigate"),
+    ("/", "edit filter"),
+    ("ESC", "clear filter"),
+];
+/// While typing the filter of the browser
+const FILTER: &[Shortcut] = &[("↑↓", "navigate"), ("ENTER", "done"), ("ESC", "clear")];
 const SYSTEM_INFO: &[Shortcut] = &[("↑↓", "scroll"), ("PGUP/PGDN", "page"), ("ESC", "close")];
 const VOLUME_MIXER: &[Shortcut] = &[("↑↓", "navigate"), ("←→", "adjust"), ("ESC", "close")];
 const MENU: &[Shortcut] = &[("↑↓", "navigate"), ("SPACE", "change"), ("ESC", "close")];
@@ -103,15 +125,14 @@ fn shortcuts(state: &HouseholdState, ui: &UiState, group: &GroupState) -> &'stat
         Mode::NowPlaying => NOW_PLAYING,
         Mode::GroupPicker(_) => GROUP_PICKER,
         Mode::GroupEditor(_) => GROUP_EDITOR,
+        Mode::Browser(browser) if browser.typing_filter() => FILTER,
         Mode::Browser(browser) => {
-            if browser
-                .tab
-                .play(browser.highlight.item, state, group)
-                .is_some()
-            {
-                BROWSER
-            } else {
-                BROWSER_VIEW
+            let playable = browser.play(state, group).is_some();
+            match (browser.filter.is_some(), playable) {
+                (false, true) => BROWSER,
+                (false, false) => BROWSER_VIEW,
+                (true, true) => BROWSER_FILTERED,
+                (true, false) => BROWSER_FILTERED_VIEW,
             }
         }
         Mode::SystemInfo(_) => SYSTEM_INFO,
