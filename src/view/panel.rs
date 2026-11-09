@@ -351,14 +351,16 @@ pub(super) fn render_browser(
     let title = Line::from(tabs);
 
     let shown = browser.shown(state, group);
-    let (note, items) = match browser.tab {
+    // What to say above the items, if anything, the items, and how many there are without the
+    // filter
+    let (note, items, total) = match browser.tab {
         Tab::Queue => {
             let queue = GroupQueue::of(state.queue.as_ref(), &group.id);
-            let (note, items) = match queue {
-                QueueContents::Loading => (Some("Reading the queue…"), Vec::new()),
-                QueueContents::Failed => (Some("Failed to read the queue"), Vec::new()),
+            match queue {
+                QueueContents::Loading => (Some("Reading the queue…"), Vec::new(), 0),
+                QueueContents::Failed => (Some("Failed to read the queue"), Vec::new(), 0),
                 QueueContents::Loaded(queue) if queue.items.is_empty() => {
-                    (Some("The queue is empty"), Vec::new())
+                    (Some("The queue is empty"), Vec::new(), 0)
                 }
                 QueueContents::Loaded(queue) => {
                     let current = group.queue_position.filter(|_| group.plays_from(queue));
@@ -368,10 +370,9 @@ pub(super) fn render_browser(
                         .collect();
                     // The queue keeps what was last played from it.
                     let note = current.is_none().then_some("Not playing from the queue");
-                    (note, items)
+                    (note, items, queue.items.len())
                 }
-            };
-            (note, items)
+            }
         }
         Tab::History => {
             let items: Vec<_> = shown
@@ -385,7 +386,7 @@ pub(super) fn render_browser(
                 .history
                 .is_empty()
                 .then_some("Nothing played recently");
-            (note, items)
+            (note, items, state.history.len())
         }
         Tab::Favorites => {
             let items: Vec<_> = shown
@@ -393,7 +394,7 @@ pub(super) fn render_browser(
                 .map(|&i| favorite_row(&state.favorites[i], symbols, theme))
                 .collect();
             let note = state.favorites.is_empty().then_some("No favorites");
-            (note, items)
+            (note, items, state.favorites.len())
         }
         Tab::Playlists => {
             let items: Vec<_> = shown
@@ -401,15 +402,12 @@ pub(super) fn render_browser(
                 .map(|&i| playlist_row(&state.playlists[i], theme))
                 .collect();
             let note = state.playlists.is_empty().then_some("No playlists");
-            (note, items)
+            (note, items, state.playlists.len())
         }
     };
     // Saying when nothing matches the filter, rather than anything else, unless there is nothing
     // to filter
-    let nothing_matches = browser.filter.is_some()
-        && items.is_empty()
-        && !browser.tab.matching(state, group, &[]).is_empty();
-    let note = if nothing_matches {
+    let note = if browser.filter.is_some() && items.is_empty() && total > 0 {
         Some("No matches")
     } else {
         note

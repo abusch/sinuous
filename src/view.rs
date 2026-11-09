@@ -444,13 +444,8 @@ impl UiState {
             self.preferred_speaker = None;
         }
         self.selected_group = selected.map(Selection::of);
-        if self
-            .seek
-            .as_ref()
-            .is_some_and(|seek| !seek.is_pending(state, Instant::now()))
-        {
-            self.seek = None;
-        }
+        self.seek
+            .take_if(|seek| !seek.is_pending(state, Instant::now()));
 
         let current = self.current_group(state).map(|(_, group)| group);
         let mixer_rows = current.map(|group| state.members(group).count() + 1);
@@ -466,12 +461,12 @@ impl UiState {
                     self.mode = Mode::NowPlaying;
                     return;
                 };
+                let shown = browser.shown(state, group);
                 if browser.find_current
                     && let QueueContents::Loaded(queue) =
                         GroupQueue::of(state.queue.as_ref(), &group.id)
                 {
                     browser.find_current = false;
-                    let shown = browser.shown(state, group);
                     let current = group
                         .queue_position
                         .filter(|_| group.plays_from(queue))
@@ -482,8 +477,7 @@ impl UiState {
                         });
                     browser.highlight = PanelHighlight::new(current.unwrap_or(0));
                 }
-                let len = browser.shown(state, group).len();
-                clamp(&mut browser.highlight.item, len);
+                clamp(&mut browser.highlight.item, shown.len());
             }
             Mode::PlaybackMenu { highlighted, .. } => clamp(highlighted, PlaybackItem::ALL.len()),
             Mode::VolumeMixer(highlighted) => match mixer_rows {
@@ -599,7 +593,7 @@ pub fn render_ui(
     ])
     .areas(frame.area());
 
-    let seeking_to = ui.seek.as_ref().and_then(|seek| seek.target_in(group));
+    let seeking_to = ui.seek.as_ref().and_then(|seek| seek.target_in(&group.id));
     render_title_bar(state, ui, theme, frame, title);
     render_footer(state, ui, group, theme, frame, footer);
     if let Mode::SystemInfo(scroll) = &mut ui.mode {

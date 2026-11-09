@@ -13,6 +13,7 @@ use ratatui::{
 use ratatui_image::{FilterType, FontSize, Resize, StatefulImage};
 use sinuous_client::playback::PlaybackState;
 
+use crate::app::REDRAW_INTERVAL;
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
 use crate::spinner::FRAMES;
@@ -468,13 +469,11 @@ fn controls_line(
 /// The frame of the spinner shown in place of the playback status while buffering, at `now`. It
 /// turns one frame every time the screen is redrawn while animated.
 fn spinner_frame(now: SystemTime) -> &'static str {
-    // The interval between redraws
-    const FRAME_MILLIS: u128 = 250;
     let ticks = now
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-        / FRAME_MILLIS;
+        / REDRAW_INTERVAL.as_millis();
     let index = usize::try_from(ticks % FRAMES.len() as u128).unwrap_or_default();
     FRAMES[index]
 }

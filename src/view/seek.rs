@@ -27,7 +27,7 @@ pub(super) struct PendingSeek {
 impl PendingSeek {
     /// The seek [`SEEK_STEP`] `forward`, or back, in the track `group` plays at `now`: from where
     /// `previous` goes if it seeks in the same group, so that pressing a key again goes further,
-    /// or from where the group is.
+    /// or from where the group is. None if it would reach the end of the track.
     pub(super) fn step(
         previous: Option<&Self>,
         group: &GroupState,
@@ -38,13 +38,15 @@ impl PendingSeek {
             Some(previous) if previous.group == group.id => previous.target,
             _ => group.playback?.position(now),
         };
-        let mut target = if forward {
+        let target = if forward {
             from + SEEK_STEP
         } else {
             from.saturating_sub(SEEK_STEP)
         };
-        if let Some(duration) = group.now_playing.as_ref().and_then(|t| t.duration_secs) {
-            target = target.min(Duration::from_secs(duration.into()));
+        // Seeking to the end would move on to the next track, where the target means nothing.
+        let duration = group.now_playing.as_ref().and_then(|t| t.duration_secs);
+        if duration.is_some_and(|duration| target >= Duration::from_secs(duration.into())) {
+            return None;
         }
         Some(Self {
             group: group.id.clone(),
@@ -58,13 +60,8 @@ impl PendingSeek {
     }
 
     /// Where `group` is seeking to, if this seek is in it.
-    pub(super) fn target_in(&self, group: &GroupState) -> Option<Duration> {
-        (self.group == group.id).then_some(self.target)
-    }
-
-    /// Whether this seek is in `group`.
-    pub(super) fn is_in(&self, group: &GroupId) -> bool {
-        self.group == *group
+    pub(super) fn target_in(&self, group: &GroupId) -> Option<Duration> {
+        (self.group == *group).then_some(self.target)
     }
 
     /// Whether the speakers are still to report getting where the seek goes, in `state` at `now`.
@@ -139,9 +136,13 @@ mod tests {
         let state = paused_at(5);
         let seek = PendingSeek::step(None, &state.groups[0], false, now).unwrap();
         assert_eq!(seek.target(), Duration::ZERO);
-        let state = paused_at(175);
+        let state = paused_at(169);
         let seek = PendingSeek::step(None, &state.groups[0], true, now).unwrap();
-        assert_eq!(seek.target(), Duration::from_secs(180));
+        assert_eq!(seek.target(), Duration::from_secs(179));
+        // Not to the end of the track, nor past it, which would move on to the next one.
+        assert!(PendingSeek::step(Some(&seek), &state.groups[0], true, now).is_none());
+        let state = paused_at(170);
+        assert!(PendingSeek::step(None, &state.groups[0], true, now).is_none());
     }
 
     #[test]

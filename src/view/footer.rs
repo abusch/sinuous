@@ -56,13 +56,14 @@ const BROWSER_FILTERED: &[Shortcut] = &[
     ("/", "edit filter"),
     ("ESC", "clear filter"),
 ];
+/// In the browser, while what it lists is filtered, when the item highlighted can't be played.
 const BROWSER_FILTERED_VIEW: &[Shortcut] = &[
     ("TAB", "switch"),
     ("↑↓", "navigate"),
     ("/", "edit filter"),
     ("ESC", "clear filter"),
 ];
-/// While typing the filter of the browser
+/// While typing the filter of the browser.
 const FILTER: &[Shortcut] = &[("↑↓", "navigate"), ("ENTER", "done"), ("ESC", "clear")];
 const SYSTEM_INFO: &[Shortcut] = &[("↑↓", "scroll"), ("PGUP/PGDN", "page"), ("ESC", "close")];
 const VOLUME_MIXER: &[Shortcut] = &[("↑↓", "navigate"), ("←→", "adjust"), ("ESC", "close")];
