@@ -32,18 +32,42 @@ fn navigate(key: KeyCode, highlighted: usize, len: usize) -> Option<usize> {
     }
 }
 
-/// Like [`navigate`], in a list in the panel on the left with `highlight` highlighted, also moving
-/// by pages, and to the first and last rows.
-fn navigate_panel(key: KeyCode, highlight: PanelHighlight, len: usize) -> Option<usize> {
+/// Like [`navigate`], in a list of `len` rows in the panel on the left with `highlight`
+/// highlighted, also moving by pages, and to the first and last rows. ctrl+D and ctrl+U scroll
+/// the list by half a page, with the highlight, as in vim.
+fn navigate_panel(
+    input: &KeyEvent,
+    highlight: PanelHighlight,
+    len: usize,
+) -> Option<PanelHighlight> {
     let page = highlight.shown.max(1);
+    let half_page = (page / 2).max(1);
     let last = len.saturating_sub(1);
-    match key {
-        KeyCode::PageUp => Some(highlight.item.saturating_sub(page)),
-        KeyCode::PageDown => Some(highlight.item.saturating_add(page).min(last)),
-        KeyCode::Home => Some(0),
-        KeyCode::End => Some(last),
-        key => navigate(key, highlight.item, len),
-    }
+    let item = match (input.code, input.modifiers) {
+        (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            return Some(PanelHighlight {
+                item: highlight.item.saturating_add(half_page).min(last),
+                first: highlight
+                    .first
+                    .saturating_add(half_page)
+                    .min(len.saturating_sub(page)),
+                ..highlight
+            });
+        }
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            return Some(PanelHighlight {
+                item: highlight.item.saturating_sub(half_page),
+                first: highlight.first.saturating_sub(half_page),
+                ..highlight
+            });
+        }
+        (KeyCode::PageUp, _) => highlight.item.saturating_sub(page),
+        (KeyCode::PageDown, _) => highlight.item.saturating_add(page).min(last),
+        (KeyCode::Home, _) => 0,
+        (KeyCode::End, _) => last,
+        (key, _) => navigate(key, highlight.item, len)?,
+    };
+    Some(PanelHighlight { item, ..highlight })
 }
 
 /// Update `ui` according to the key pressed, and return what else it asks for, if anything.
@@ -450,8 +474,8 @@ fn handle_browser_input(
         return None;
     };
     let len = browser.shown(state, group).len();
-    if let Some(item) = navigate_panel(input.code, browser.highlight, len) {
-        browser.highlight.item = item;
+    if let Some(highlight) = navigate_panel(input, browser.highlight, len) {
+        browser.highlight = highlight;
         return None;
     }
     match input.code {
@@ -509,19 +533,14 @@ fn handle_filter_input(input: &KeyEvent, state: &HouseholdState, ui: &mut UiStat
         KeyCode::Enter if filter.text.trim().is_empty() => browser.filter = None,
         KeyCode::Enter => filter.editing = false,
         KeyCode::Esc => clear_filter(browser, state, group),
-        // j and k are text here, but the arrows still move the highlight.
-        KeyCode::Up
-        | KeyCode::Down
-        | KeyCode::PageUp
-        | KeyCode::PageDown
-        | KeyCode::Home
-        | KeyCode::End => {
+        // j and k are text here, but the arrows, the page keys, ctrl+D and ctrl+U still move the
+        // highlight.
+        _ => {
             let len = browser.shown(state, group).len();
-            if let Some(item) = navigate_panel(input.code, browser.highlight, len) {
-                browser.highlight.item = item;
+            if let Some(highlight) = navigate_panel(input, browser.highlight, len) {
+                browser.highlight = highlight;
             }
         }
-        _ => {}
     }
 }
 
@@ -994,6 +1013,46 @@ mod tests {
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(favorite, "evening".into());
         assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_scroll_the_browser_by_half_pages() {
+        let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        // 10 rows shown out of 25, the 3rd one highlighted
+        let mut highlight = PanelHighlight {
+            item: 3,
+            first: 1,
+            shown: 10,
+        };
+        let mut moves = Vec::new();
+        for key in ['d', 'd', 'd', 'd', 'u', 'u', 'u', 'u', 'u'] {
+            highlight = navigate_panel(&ctrl(key), highlight, 25).unwrap();
+            moves.push((highlight.item, highlight.first));
+        }
+        // The highlight stays where it is on the screen until the list can't scroll further.
+        assert_eq!(
+            moves,
+            [
+                (8, 6),
+                (13, 11),
+                (18, 15),
+                (23, 15),
+                (18, 10),
+                (13, 5),
+                (8, 0),
+                (3, 0),
+                (0, 0),
+            ]
+        );
+
+        // Fewer rows than fit
+        let highlight = PanelHighlight {
+            item: 0,
+            first: 0,
+            shown: 10,
+        };
+        let highlight = navigate_panel(&ctrl('d'), highlight, 3).unwrap();
+        assert_eq!((highlight.item, highlight.first), (2, 0));
     }
 
     /// The keys typing `text`.
