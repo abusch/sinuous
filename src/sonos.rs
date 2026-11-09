@@ -265,6 +265,11 @@ impl Playback {
         self.position + advanced
     }
 
+    /// The position in the current track the speakers last reported.
+    pub fn reported_position(&self) -> Duration {
+        self.position
+    }
+
     /// Whether [`Playback::position`] changes over time.
     pub fn is_advancing(&self) -> bool {
         self.advancing_since.is_some()
@@ -277,6 +282,15 @@ impl Playback {
             play_modes,
             actions,
             ..Self::from_parts(PlaybackState::Paused, Duration::ZERO, Instant::now())
+        }
+    }
+
+    /// Playback in `state`, reported at `position`, of a source supporting `actions`.
+    #[cfg(test)]
+    pub fn at(state: PlaybackState, position: Duration, actions: PlaybackActions) -> Self {
+        Self {
+            actions,
+            ..Self::from_parts(state, position, Instant::now())
         }
     }
 
@@ -394,6 +408,8 @@ pub enum GroupAction {
     Pause,
     Next,
     Previous,
+    /// Move to this position in the current track.
+    Seek(Duration),
     AdjustVolume(i8),
     LoadFavorite(FavoriteId),
     LoadPlaylist(PlaylistId),
@@ -415,7 +431,8 @@ pub enum PlayerAction {
 
 impl Command {
     /// Add `other` to this command if running both amounts to running one: changes of the volume
-    /// of the same group or player. Gives `other` back otherwise.
+    /// of the same group or player, or seeks in the same group, where the last one wins. Gives
+    /// `other` back otherwise.
     fn merge(&mut self, other: Command) -> Result<(), Command> {
         match (self, other) {
             (
@@ -442,6 +459,19 @@ impl Command {
                 },
             ) if *player == other_player => {
                 *delta = delta.saturating_add(other_delta);
+                Ok(())
+            }
+            (
+                Command::Group {
+                    group,
+                    action: GroupAction::Seek(position),
+                },
+                Command::Group {
+                    group: other_group,
+                    action: GroupAction::Seek(other_position),
+                },
+            ) if *group == other_group => {
+                *position = other_position;
                 Ok(())
             }
             (_, other) => Err(other),
@@ -1058,6 +1088,13 @@ async fn run_group_command(
             .skip_to_previous_track()
             .await
             .context("Failed to skip to the previous track")?,
+        GroupAction::Seek(position) => group
+            .seek(
+                u64::try_from(position.as_millis()).unwrap_or(u64::MAX),
+                None,
+            )
+            .await
+            .context("Failed to seek")?,
         GroupAction::AdjustVolume(delta) => group
             .set_relative_volume(*delta)
             .await
@@ -1389,6 +1426,31 @@ mod tests {
             }
         ));
         assert!(command.merge(player_volume("o", -1)).is_err());
+    }
+
+    #[test]
+    fn seeks_in_the_same_group_are_merged_into_the_last_one() {
+        let seek = |group: &str, secs| Command::Group {
+            group: group.into(),
+            action: GroupAction::Seek(Duration::from_secs(secs)),
+        };
+
+        let mut command = seek("kitchen", 10);
+        assert!(command.merge(seek("kitchen", 20)).is_ok());
+        assert!(command.merge(seek("kitchen", 5)).is_ok());
+        assert!(matches!(
+            command,
+            Command::Group {
+                action: GroupAction::Seek(position),
+                ..
+            } if position == Duration::from_secs(5)
+        ));
+        assert!(command.merge(seek("office", 10)).is_err());
+        let volume = Command::Group {
+            group: "kitchen".into(),
+            action: GroupAction::AdjustVolume(1),
+        };
+        assert!(command.merge(volume).is_err());
     }
 
     #[test]

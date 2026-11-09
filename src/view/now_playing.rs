@@ -1,6 +1,6 @@
 //! What the selected group is playing, with its controls, progress and volume.
 
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::{
     Frame,
@@ -15,6 +15,7 @@ use sinuous_client::playback::PlaybackState;
 
 use crate::artwork::Artwork;
 use crate::sonos::{GroupState, Source, TrackInfo};
+use crate::spinner::FRAMES;
 use crate::symbols::{Badge, Symbols};
 use crate::theme::Theme;
 
@@ -52,10 +53,12 @@ pub(super) enum AlbumArt {
     Shown,
 }
 
-/// The name of `group`, the track playing on it, how far into it playback is, its volume, and the
-/// next track.
+/// The name of `group`, the track playing on it, how far into it playback is (or where it is
+/// seeking to), its volume, and the next track.
+#[expect(clippy::too_many_arguments)]
 pub(super) fn render_now_playing(
     group: &GroupState,
+    seeking_to: Option<Duration>,
     symbols: &Symbols,
     theme: &Theme,
     frame: &mut Frame,
@@ -189,6 +192,7 @@ pub(super) fn render_now_playing(
     );
     render_progress(
         group,
+        seeking_to,
         theme,
         frame,
         progress_area,
@@ -225,6 +229,7 @@ pub(super) fn render_now_playing(
 /// and the name of the group, how far into it playback is, then the controls and the volume.
 pub(super) fn render_player_bar(
     group: &GroupState,
+    seeking_to: Option<Duration>,
     symbols: &Symbols,
     theme: &Theme,
     frame: &mut Frame,
@@ -274,7 +279,7 @@ pub(super) fn render_player_bar(
     frame.render_widget(info, info_area);
 
     let bar_area = progress_area.inner(Margin::new(TIME_WIDTH + 1, 0));
-    render_progress(group, theme, frame, progress_area, bar_area);
+    render_progress(group, seeking_to, theme, frame, progress_area, bar_area);
 
     // The controls on the left, without the play modes if they leave too little room for the
     // volume on the right
@@ -423,6 +428,7 @@ fn controls_line(
 ) -> Line<'static> {
     let is_playing = group.playback.is_some_and(|p| p.is_playing);
     let status = match group.playback {
+        Some(p) if p.state == PlaybackState::Buffering => spinner_frame(SystemTime::now()),
         _ if is_playing => symbols.playing,
         Some(p) if p.state == PlaybackState::Idle => symbols.stopped,
         _ => symbols.paused,
@@ -459,25 +465,31 @@ fn controls_line(
     Line::from(spans)
 }
 
-/// A bar showing how far into the current track `group` is in `bar_area`, between the elapsed and
-/// remaining times, in the rest of `area`.
+/// The frame of the spinner shown in place of the playback status while buffering, at `now`. It
+/// turns one frame every time the screen is redrawn while animated.
+fn spinner_frame(now: SystemTime) -> &'static str {
+    // The interval between redraws
+    const FRAME_MILLIS: u128 = 250;
+    let ticks = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / FRAME_MILLIS;
+    let index = usize::try_from(ticks % FRAMES.len() as u128).unwrap_or_default();
+    FRAMES[index]
+}
+
+/// A bar showing how far into the current track `group` is, or where it is seeking to, in
+/// `bar_area`, between the elapsed and remaining times, in the rest of `area`.
 fn render_progress(
     group: &GroupState,
+    seeking_to: Option<Duration>,
     theme: &Theme,
     frame: &mut Frame,
     area: Rect,
     bar_area: Rect,
 ) {
     let playback = group.playback;
-    if playback.is_some_and(|p| p.state == PlaybackState::Buffering) {
-        frame.render_widget(
-            Paragraph::new("Buffering…")
-                .style(Style::default().fg(theme.muted))
-                .centered(),
-            area,
-        );
-        return;
-    }
     // Live radio has no position in what it plays, only the time since it started.
     let is_station = group
         .now_playing
@@ -489,7 +501,8 @@ fn render_progress(
         .map_or(0, |track| track.duration_secs.unwrap_or(0));
     let elapsed = match (&group.now_playing, playback) {
         (Some(_), Some(p)) if !is_station => {
-            let elapsed = u32::try_from(p.position(Instant::now()).as_secs()).unwrap_or(u32::MAX);
+            let position = seeking_to.unwrap_or_else(|| p.position(Instant::now()));
+            let elapsed = u32::try_from(position.as_secs()).unwrap_or(u32::MAX);
             // The position is worked out locally, and can run past the end of the track until the
             // speakers report the next one.
             if duration != 0 {

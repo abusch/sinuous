@@ -166,6 +166,7 @@ pub(super) fn render_help(theme: &Theme, frame: &mut Frame, area: Rect) {
             &[
                 ("SPACE", "Play / pause (or stop)"),
                 ("p / n", "Previous / next track"),
+                ("< / >", "Seek back / forward 10 seconds"),
                 ("s", "Toggle shuffle"),
                 ("r", "Cycle repeat: all, one, off"),
                 ("[ / ]", "Volume down / up"),
