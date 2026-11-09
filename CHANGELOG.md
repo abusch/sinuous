@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0](https://github.com/abusch/sinuous/compare/v0.4.0...v0.5.0) - 2026-11-09
+
+### Added
+
+- Seek back and forward with < and >
+- Scroll the browser by half pages with ctrl+D and ctrl+U
+- Filter what the browser lists with /
+
+### Fixed
+
+- Don't seek to the end of the track
+
+### Other
+
+- Simplify the browser filter and seek code
+- *(deps)* bump toml from 1.1.8+spec-1.1.0 to 1.2.0+spec-1.1.0
+
 ## [0.4.0](https://github.com/abusch/sinuous/compare/v0.3.0...v0.4.0) - 2026-10-31
 
 ### Added
