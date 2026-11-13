@@ -169,6 +169,10 @@ pub(super) fn render_now_playing(
             Style::default().fg(theme.muted),
         )],
     };
+    let info: Vec<_> = info
+        .into_iter()
+        .map(|line| ellipsize(line, info_area.width))
+        .collect();
     frame.render_widget(Paragraph::new(info).centered(), info_area);
 
     // The volume slider lines up with the controls above it, unless they are too narrow (with
@@ -213,16 +217,36 @@ pub(super) fn render_now_playing(
     });
     if let Some(next) = next {
         let dim = Style::default().fg(theme.muted);
-        let next = Line::from(vec![
+        let title = Line::from(vec![
             Span::styled("Next: ", dim),
             Span::raw(next.title.as_deref().unwrap_or("Unknown title")),
-            Span::styled(" by ", dim),
+        ]);
+        let by = [
+            Span::styled("by ", dim),
             Span::styled(
                 next.artist.as_deref().unwrap_or("Unknown artist"),
                 Style::default().fg(theme.artist),
             ),
-        ]);
-        frame.render_widget(Paragraph::new(next).centered(), next_area);
+        ];
+        // Move the artist to the line below (the gap under it) rather than truncate the title.
+        let one_line = title.width() + 1 + by.iter().map(Span::width).sum::<usize>();
+        if one_line <= usize::from(next_area.width) || next_area.bottom() >= area.bottom() {
+            let mut line = title;
+            line.push_span(Span::raw(" "));
+            line.extend(by);
+            let line = ellipsize(line, next_area.width);
+            frame.render_widget(Paragraph::new(line).centered(), next_area);
+        } else {
+            let lines = vec![
+                ellipsize(title, next_area.width),
+                ellipsize(Line::from(by.to_vec()), next_area.width),
+            ];
+            let next_area = Rect {
+                height: 2,
+                ..next_area
+            };
+            frame.render_widget(Paragraph::new(lines).centered(), next_area);
+        }
     }
 }
 
@@ -277,7 +301,7 @@ pub(super) fn render_player_bar(
         room -= BAR_GAP + line_width;
         end = x - BAR_GAP;
     }
-    frame.render_widget(info, info_area);
+    frame.render_widget(ellipsize(info, info_area.width), info_area);
 
     let bar_area = progress_area.inner(Margin::new(TIME_WIDTH + 1, 0));
     render_progress(group, seeking_to, theme, frame, progress_area, bar_area);
@@ -303,6 +327,37 @@ pub(super) fn render_player_bar(
         render_sleep_timer(end, symbols, theme, frame, controls_area, controls_end);
     }
     render_volume(group, symbols, theme, frame, volume_area);
+}
+
+/// `line`, cut to fit in `max_width` columns with an ellipsis in place of its last character
+/// that fits if it doesn't.
+fn ellipsize(line: Line<'_>, max_width: u16) -> Line<'_> {
+    let max_width = usize::from(max_width);
+    if line.width() <= max_width || max_width == 0 {
+        return line;
+    }
+    let mut budget = max_width - 1;
+    let mut spans = Vec::new();
+    let mut last_style = line.style;
+    'spans: for span in &line.spans {
+        let mut content = String::new();
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let width = Span::raw(grapheme.symbol).width();
+            if width > budget {
+                if !content.is_empty() {
+                    spans.push(Span::styled(content, span.style));
+                }
+                last_style = span.style;
+                break 'spans;
+            }
+            budget -= width;
+            content.push_str(grapheme.symbol);
+        }
+        last_style = span.style;
+        spans.push(Span::styled(content, span.style));
+    }
+    spans.push(Span::styled("…", last_style));
+    Line { spans, ..line }
 }
 
 /// How wide `line` is, in columns.
@@ -781,5 +836,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ellipsize_replaces_the_last_character_that_fits() {
+        let text = |line: Line| {
+            line.spans
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        let line = Line::from(vec![Span::raw("Next: "), Span::raw("Solitude")]);
+        assert_eq!(text(ellipsize(line.clone(), 14)), "Next: Solitude");
+        assert_eq!(text(ellipsize(line.clone(), 10)), "Next: Sol…");
+        assert_eq!(text(ellipsize(line, 6)), "Next:…");
+        assert_eq!(text(ellipsize(Line::raw("日本語"), 4)), "日…");
     }
 }
