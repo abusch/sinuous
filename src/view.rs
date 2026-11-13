@@ -1643,6 +1643,32 @@ mod tests {
     }
 
     #[test]
+    fn long_next_track_puts_artist_on_its_own_line() {
+        use crate::sonos::TrackInfo;
+
+        let track = |title: &str| TrackInfo {
+            title: Some(title.to_owned()),
+            artist: Some("Candlemass".to_owned()),
+            explicit: false,
+            duration_secs: None,
+            image_url: None,
+            is_station: false,
+        };
+        let mut state = household();
+        state.groups[0].now_playing = Some(track("Bewitched"));
+        state.groups[0].next_track = Some(track(&"Solitude ".repeat(12)));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+        let rows = screen_rows(&state, &mut ui, 120);
+        let next = rows
+            .iter()
+            .position(|row| row.contains("Next: Solitude"))
+            .unwrap();
+        assert!(!rows[next].contains("Candlemass"));
+        assert!(rows[next + 1].contains("by Candlemass"));
+    }
+
+    #[test]
     fn panel_scrolls_as_little_as_possible() {
         let mut highlight = PanelHighlight::new(0);
         let mut firsts = Vec::new();
