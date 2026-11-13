@@ -985,6 +985,37 @@ mod tests {
     }
 
     #[test]
+    fn groups_show_the_battery_of_their_coordinator_and_the_group_editor_of_each_speaker() {
+        let mut state = household();
+        let battery = |percentage: f64| {
+            serde_json::from_value(serde_json::json!({
+                "_objectType": "battery",
+                "batteryPercentage": percentage,
+                "chargingState": "NOT_CHARGING",
+            }))
+            .unwrap()
+        };
+        // The bedroom coordinates the office, and the kitchen has no battery.
+        state.players[0].battery = Some(battery(85.0));
+        state.players[2].battery = Some(battery(42.0));
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        press(&[KeyCode::Char('g')], &state, &mut ui);
+        // The battery emoji is two cells wide, so the second is blank.
+        let groups = screen_rows(&state, &mut ui, 120).join("\n");
+        assert!(groups.contains("Bedroom + 1 · 🔋  85%"), "{groups}");
+        assert!(!groups.contains("42%"), "{groups}");
+        assert!(!groups.contains("Kitchen ·"), "{groups}");
+
+        press(&[KeyCode::Esc, KeyCode::Char('G')], &state, &mut ui);
+        let editor = screen_rows(&state, &mut ui, 120).join("\n");
+        assert!(editor.contains("Bedroom Move · 🔋  85%"), "{editor}");
+        assert!(editor.contains("Office Move · 🔋  42%"), "{editor}");
+        assert!(!editor.contains("Kitchen Move ·"), "{editor}");
+    }
+
+    #[test]
     fn volume_mixer_shows_models_with_sliders_lined_up() {
         use ratatui::{Terminal, backend::TestBackend};
 

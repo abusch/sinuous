@@ -3,6 +3,10 @@
 
 use std::borrow::Cow;
 
+use sinuous_client::hardware_status::{BatteryStatus, ChargingState};
+
+use crate::sonos::battery_is_low;
+
 #[derive(Debug)]
 pub struct Symbols {
     // Playback status
@@ -56,6 +60,12 @@ pub struct Symbols {
 
     // In the playback menu
     pub sleep_timer: &'static str,
+
+    // The battery of portable speakers, by tenths of charge, from empty to full
+    battery: [&'static str; 11],
+    battery_charging: [&'static str; 11],
+    /// A battery running out.
+    battery_low: &'static str,
 }
 
 /// A mark after the name of something, e.g. of explicit tracks.
@@ -99,6 +109,9 @@ impl Symbols {
         unchecked: "[ ]",
         theme: "🎨",
         sleep_timer: "🌙",
+        battery: ["🔋"; 11],
+        battery_charging: ["⚡"; 11],
+        battery_low: "🪫",
     };
 
     /// Material Design icons, see https://www.nerdfonts.com/cheat-sheet.
@@ -144,6 +157,33 @@ impl Symbols {
         unchecked: "\u{f0131}",             // nf-md-checkbox_blank_outline
         theme: "\u{f03d8}",                 // nf-md-palette
         sleep_timer: "\u{f04b2}",           // nf-md-sleep
+        battery: [
+            "\u{f008e}", // nf-md-battery_outline
+            "\u{f007a}", // nf-md-battery_10
+            "\u{f007b}", // nf-md-battery_20
+            "\u{f007c}", // nf-md-battery_30
+            "\u{f007d}", // nf-md-battery_40
+            "\u{f007e}", // nf-md-battery_50
+            "\u{f007f}", // nf-md-battery_60
+            "\u{f0080}", // nf-md-battery_70
+            "\u{f0081}", // nf-md-battery_80
+            "\u{f0082}", // nf-md-battery_90
+            "\u{f0079}", // nf-md-battery
+        ],
+        battery_charging: [
+            "\u{f089f}", // nf-md-battery_charging_outline
+            "\u{f089c}", // nf-md-battery_charging_10
+            "\u{f0086}", // nf-md-battery_charging_20
+            "\u{f0087}", // nf-md-battery_charging_30
+            "\u{f0088}", // nf-md-battery_charging_40
+            "\u{f089d}", // nf-md-battery_charging_50
+            "\u{f0089}", // nf-md-battery_charging_60
+            "\u{f089e}", // nf-md-battery_charging_70
+            "\u{f008a}", // nf-md-battery_charging_80
+            "\u{f008b}", // nf-md-battery_charging_90
+            "\u{f0085}", // nf-md-battery_charging_100
+        ],
+        battery_low: "\u{f0083}", // nf-md-battery_alert
     };
 
     /// The volume level `volume` is shown as.
@@ -153,6 +193,19 @@ impl Symbols {
             Some(1..=33) => self.volume_low,
             Some(34..=66) => self.volume_medium,
             Some(_) => self.volume_high,
+        }
+    }
+
+    /// The icon showing how charged `battery` is, and whether it is charging.
+    pub fn battery(&self, battery: &BatteryStatus) -> &'static str {
+        if battery_is_low(battery) {
+            return self.battery_low;
+        }
+        let tenths = (battery.battery_percentage / 10.0).round().clamp(0.0, 10.0) as usize;
+        if battery.charging_state == ChargingState::Charging {
+            self.battery_charging[tenths]
+        } else {
+            self.battery[tenths]
         }
     }
 
@@ -186,5 +239,40 @@ mod tests {
         assert_eq!(nerd_font.service("Apple Music"), "\u{f0035} Apple Music");
         assert_eq!(nerd_font.service("TIDAL"), "TIDAL");
         assert_eq!(Symbols::choose(false).service("Spotify"), "Spotify");
+    }
+
+    fn battery(percentage: f64, charging_state: &str) -> BatteryStatus {
+        serde_json::from_value(serde_json::json!({
+            "_objectType": "battery",
+            "batteryPercentage": percentage,
+            "chargingState": charging_state,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn battery_icons_show_the_charge_and_whether_it_is_charging() {
+        let nerd_font = Symbols::choose(true);
+        assert_eq!(
+            nerd_font.battery(&battery(100.0, "NOT_CHARGING")),
+            "\u{f0079}"
+        );
+        assert_eq!(
+            nerd_font.battery(&battery(64.0, "NOT_CHARGING")),
+            "\u{f007f}"
+        );
+        assert_eq!(nerd_font.battery(&battery(66.0, "CHARGING")), "\u{f089e}");
+        assert_eq!(nerd_font.battery(&battery(3.0, "CHARGING")), "\u{f089f}");
+        // Running out, unless it is charging.
+        assert_eq!(
+            nerd_font.battery(&battery(15.0, "NOT_CHARGING")),
+            "\u{f0083}"
+        );
+        assert_eq!(nerd_font.battery(&battery(15.0, "CHARGING")), "\u{f0086}");
+
+        let labels = Symbols::choose(false);
+        assert_eq!(labels.battery(&battery(64.0, "NOT_CHARGING")), "🔋");
+        assert_eq!(labels.battery(&battery(64.0, "CHARGING")), "⚡");
+        assert_eq!(labels.battery(&battery(15.0, "NOT_CHARGING")), "🪫");
     }
 }

@@ -17,7 +17,7 @@ use sinuous_client::{
     Event, EventPayload, FavoriteId, GroupId, Household, HouseholdId, PlayerId, PlaylistId,
     Subscription, Topology,
     favorites::Favorite,
-    hardware_status::{BatteryStatus, WirelessNetworkStatus},
+    hardware_status::{BatteryStatus, ChargingState, WirelessNetworkStatus},
     history::{ContentType, HistoryItem},
     playback::{
         LoadAction, LoadOptions, PlayModes, PlayModesUpdate, PlaybackActions, PlaybackState,
@@ -95,6 +95,10 @@ pub struct HouseholdState {
 impl HouseholdState {
     pub fn group(&self, id: &GroupId) -> Option<&GroupState> {
         self.groups.iter().find(|g| &g.id == id)
+    }
+
+    pub fn player(&self, id: &PlayerId) -> Option<&PlayerInfo> {
+        self.players.iter().find(|p| &p.id == id)
     }
 
     /// The players in `group`, sorted by name.
@@ -214,6 +218,14 @@ pub struct PlayerInfo {
     pub battery: Option<BatteryStatus>,
     /// Its Wi-Fi connection, once it has reported it. Players connected by Ethernet don't.
     pub wifi: Option<WirelessNetworkStatus>,
+}
+
+/// Below this charge, in percent, a battery is low.
+const LOW_BATTERY: f64 = 20.0;
+
+/// Whether `battery` is running out: low, and not charging.
+pub fn battery_is_low(battery: &BatteryStatus) -> bool {
+    battery.battery_percentage < LOW_BATTERY && battery.charging_state != ChargingState::Charging
 }
 
 #[derive(Debug, Clone, Copy)]

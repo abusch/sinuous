@@ -11,13 +11,16 @@ use ratatui::{
 
 use sinuous_client::{
     favorites::Favorite,
+    hardware_status::BatteryStatus,
     history::{ContentType, HistoryItem},
     playback::PlaybackState,
     playlists::PlaylistSummary,
     queue::QueueEntry,
 };
 
-use crate::sonos::{GroupQueue, GroupState, HouseholdState, PlayerInfo, QueueContents};
+use crate::sonos::{
+    GroupQueue, GroupState, HouseholdState, PlayerInfo, QueueContents, battery_is_low,
+};
 use crate::symbols::Symbols;
 use crate::theme::Theme;
 
@@ -42,7 +45,19 @@ pub(super) fn render_group_panel(
         .groups
         .iter()
         .enumerate()
-        .map(|(i, group)| Text::from(Vec::from(group_lines(group, i == selected, symbols, theme))))
+        .map(|(i, group)| {
+            // A group has the battery of its coordinator, that portable speakers group around.
+            let battery = state
+                .player(&group.coordinator_id)
+                .and_then(|coordinator| coordinator.battery.as_ref());
+            Text::from(Vec::from(group_lines(
+                group,
+                battery,
+                i == selected,
+                symbols,
+                theme,
+            )))
+        })
         .collect();
     render_panel(
         frame,
@@ -159,9 +174,11 @@ impl Widget for Columns<'_> {
     }
 }
 
-/// The lines showing `group` in the group panel: its name, whether it is playing, and what.
+/// The lines showing `group` in the group panel: its name and `battery`, if any, whether it is
+/// playing, and what.
 fn group_lines<'a>(
     group: &'a GroupState,
+    battery: Option<&BatteryStatus>,
     selected: bool,
     symbols: &Symbols,
     theme: &Theme,
@@ -218,8 +235,14 @@ fn group_lines<'a>(
         None => track_line.push(Span::styled("No content", muted)),
     }
 
+    let mut name_line = vec![Span::styled(group.name.as_str(), name_style)];
+    if let Some(battery) = battery {
+        name_line.push(Span::styled(" · ", muted));
+        name_line.push(battery_span(battery, symbols, theme));
+    }
+
     [
-        Line::styled(group.name.as_str(), name_style),
+        Line::from(name_line),
         Line::from(status_line),
         Line::from(track_line),
     ]
@@ -299,10 +322,30 @@ fn speaker_lines<'a>(
         status_line.push(Span::styled("coordinator", muted));
     }
 
-    [
-        Line::from(speaker_name(player, name_style, theme)),
-        Line::from(status_line),
-    ]
+    let mut name_line = speaker_name(player, name_style, theme);
+    if let Some(battery) = &player.battery {
+        name_line.push(Span::styled(" · ", muted));
+        name_line.push(battery_span(battery, symbols, theme));
+    }
+
+    [Line::from(name_line), Line::from(status_line)]
+}
+
+/// The charge of `battery`, after an icon showing it, in red if it is running out.
+fn battery_span(battery: &BatteryStatus, symbols: &Symbols, theme: &Theme) -> Span<'static> {
+    let colour = if battery_is_low(battery) {
+        theme.error
+    } else {
+        theme.secondary
+    };
+    Span::styled(
+        format!(
+            "{} {:.0}%",
+            symbols.battery(battery),
+            battery.battery_percentage
+        ),
+        Style::default().fg(colour),
+    )
 }
 
 /// The name of `player` in `style`, followed by its model, if it is known.
