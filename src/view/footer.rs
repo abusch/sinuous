@@ -30,6 +30,7 @@ const GROUP_PICKER: &[Shortcut] = &[("↑↓", "navigate"), ("ENTER", "select"),
 const GROUP_EDITOR: &[Shortcut] = &[
     ("↑↓", "navigate"),
     ("SPACE", "toggle"),
+    ("a", "all"),
     ("ENTER", "apply"),
     ("ESC", "cancel"),
 ];

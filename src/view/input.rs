@@ -321,6 +321,11 @@ fn handle_group_editor_input(
                 editor.members.insert(player.id.clone());
             }
         }
+        KeyCode::Char('a') => {
+            editor
+                .members
+                .extend(state.players.iter().map(|p| p.id.clone()));
+        }
         KeyCode::Enter => {
             let command = set_members(state, group, &editor.members);
             ui.mode = Mode::NowPlaying;
@@ -717,6 +722,35 @@ mod tests {
         assert_eq!(group, GroupId::from("bedroom"));
         assert_eq!(players, [PlayerId::from("b"), PlayerId::from("k")]);
         assert!(matches!(ui.mode, Mode::NowPlaying));
+    }
+
+    #[test]
+    fn group_editor_selects_all_speakers_with_a() {
+        let state = household();
+        let mut ui = UiState::default();
+        ui.sync(&state);
+
+        let command = press(
+            &[KeyCode::Char('G'), KeyCode::Char('a'), KeyCode::Enter],
+            &state,
+            &mut ui,
+        );
+
+        let Some(Request::Speakers(Command::Group {
+            action: GroupAction::SetMembers(players),
+            ..
+        })) = command
+        else {
+            panic!("Unexpected command: {command:?}");
+        };
+        assert_eq!(
+            players,
+            [
+                PlayerId::from("b"),
+                PlayerId::from("k"),
+                PlayerId::from("o")
+            ]
+        );
     }
 
     #[test]

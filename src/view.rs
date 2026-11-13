@@ -974,7 +974,7 @@ mod tests {
             .collect();
         for shown in [
             "Group speakers",
-            "SPACE toggle • ENTER apply",
+            "SPACE toggle • a all • ENTER apply",
             "Bedroom Move",
             "In this group · coordinator",
             "On its own",
@@ -1318,10 +1318,10 @@ mod tests {
         press(&[KeyCode::Char('G')], &state, &mut ui);
 
         // Exactly as wide as the keys, plus a column on each side
-        let rows = screen_rows(&state, &mut ui, 55);
+        let rows = screen_rows(&state, &mut ui, 63);
         assert_eq!(
             rows.last().unwrap(),
-            " ↑↓ navigate • SPACE toggle • ENTER apply • ESC cancel "
+            " ↑↓ navigate • SPACE toggle • a all • ENTER apply • ESC cancel "
         );
     }
 
