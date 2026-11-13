@@ -93,7 +93,8 @@ sinuous --device "Living Room"
 | <kbd>q</kbd> | Close what is open, or quit |
 
 The bar at the bottom of the screen shows the keys to use in what is open. In
-the panel with the queue, the history, the favorites and the playlists,
+the group editor, <kbd>Space</kbd> adds or removes the highlighted speaker, and
+<kbd>a</kbd> adds them all. In the panel with the queue, the history, the favorites and the playlists,
 <kbd>Tab</kbd> switches between them, and <kbd>Enter</kbd> plays what is
 highlighted. <kbd>/</kbd> filters what is listed, as you type: only what
 contains each of the words typed is shown, whatever their case, e.g. the title,
