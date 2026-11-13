@@ -18,16 +18,13 @@ use sinuous_client::{
     playback::PlaybackState,
 };
 
-use crate::sonos::{HouseholdState, PlayerInfo};
+use crate::sonos::{HouseholdState, PlayerInfo, battery_is_low};
 use crate::theme::Theme;
 
 use super::Scroll;
 
 /// How wide labels are, for the values to line up.
 const LABEL_WIDTH: usize = 14;
-
-/// Below this charge, in percent, the battery is shown as low.
-const LOW_BATTERY: f64 = 20.0;
 
 /// How far the details of the devices of a speaker are indented.
 const DEVICE_INDENT: usize = 2;
@@ -210,9 +207,7 @@ fn battery_text(battery: &BatteryStatus, theme: &Theme) -> Span<'static> {
     if let Some(temperature) = battery.battery_temperature {
         text.push_str(&format!(" · {temperature:.1} °C"));
     }
-    let low = battery.battery_percentage < LOW_BATTERY
-        && battery.charging_state != ChargingState::Charging;
-    if low {
+    if battery_is_low(battery) {
         Span::styled(text, Style::default().fg(theme.error))
     } else {
         Span::raw(text)
