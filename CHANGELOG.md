@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/abusch/sinuous/compare/v0.5.0...v0.6.0) - 2026-11-13
+
+### Added
+
+- Wrap and ellipsize long track titles
+- Select all speakers in the group editor with a
+- Show the battery of portable speakers in the group panels
+
+### Other
+
+- update dependencies
+
 ## [0.5.0](https://github.com/abusch/sinuous/compare/v0.4.0...v0.5.0) - 2026-11-09
 
 ### Added
